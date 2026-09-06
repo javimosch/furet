@@ -15,6 +15,7 @@ func print_help() {
   println("  html  <url>                 raw response body")
   println("  eval  <url> --js 'EXPR'     run JS with a `page` object + document (light only)")
   println("  extract <url> --js 'EXPR'   run JS over the real DOM, emit {count,items} JSON")
+  println("  maps  <query> --heavy       scrape Google Maps places (real browser)")
   println("  guide                       machine-readable capability catalog (JSON)")
   println("  help                        this text")
   println("")
@@ -67,6 +68,16 @@ func main() {
   if !engine_known(engine) {
     emit_err(engine, cmd, "", 0, "unknown engine '" + engine + "' (use light|heavy)")
     exit(2)
+  }
+
+  if cmd == "maps" {
+    query := ""
+    parts := []string{}
+    i := 1
+    for i < len(rest) { parts = append(parts, rest[i])  i = i + 1 }
+    query = join(parts, " ")
+    if len(query) == 0 { emit_err(engine, "maps", "", 0, "maps needs a query, e.g. furet maps \"restaurants Annecy\" --heavy")  exit(2) }
+    exit(cmd_maps(engine, query))
   }
 
   if len(rest) < 2 {

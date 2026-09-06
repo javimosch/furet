@@ -1,0 +1,119 @@
+// wsclient.src — a plain (ws://) WebSocket client over dial(), because machin's
+// wss_* builtins are TLS-only and Chrome's DevTools endpoint is ws://.
+// Client frames are masked with an all-zero key (a valid key), so no XOR pass is
+// needed: masked payload == plaintext. Server frames are read with full
+// extended-length parsing; ping is answered with pong.
+
+var WS_FD  = -1
+var WS_BUF = bytes("")
+
+func ws_reset(fd) { WS_FD = fd  WS_BUF = bytes("") }
+func ws_close() { if WS_FD > 0 { close(WS_FD) }  WS_FD = -1 }
+
+func ws_fill_to(n) (ok) {
+  ok = true
+  for len(WS_BUF) < n {
+    chunk := read_bytes(WS_FD)
+    if len(chunk) == 0 { ok = false  return }
+    WS_BUF = bytes_concat(WS_BUF, chunk)
+  }
+}
+
+func hex1(v) (h) {
+  digits := "0123456789abcdef"
+  h = substr(digits, v, v+1)
+}
+func hex2(v) (h) { h = hex1(v / 16) + hex1(v % 16) }
+
+// frame header (with a 4-byte zero mask key) for a client frame of length n.
+func ws_frame_header(opcode, n) (h) {
+  hx := hex2(128 + opcode)
+  if n < 126 {
+    hx = hx + hex2(128 + n)
+  } else {
+    if n < 65536 {
+      hx = hx + hex2(254) + hex2(n / 256) + hex2(n % 256)
+    } else {
+      hx = hx + hex2(255) + "00000000" +
+           hex2((n / 16777216) % 256) + hex2((n / 65536) % 256) +
+           hex2((n / 256) % 256) + hex2(n % 256)
+    }
+  }
+  hx = hx + "00000000"
+  h = from_hex(hx)
+}
+
+func ws_send_op(opcode, payload) (ok) {
+  frame := bytes_concat(ws_frame_header(opcode, len(payload)), payload)
+  ok = write_bytes(WS_FD, frame) > 0
+}
+func ws_send_text(s) (ok) { ok = ws_send_op(1, bytes(s)) }
+
+func ws_recv_text() (msg, ok) {
+  msg = ""
+  ok = false
+  if !ws_fill_to(2) { return }
+  b0 := byte_at(WS_BUF, 0)
+  b1 := byte_at(WS_BUF, 1)
+  opcode := b0 % 16
+  masked := b1 >= 128
+  ln := b1 % 128
+  hdr := 2
+  if ln == 126 {
+    if !ws_fill_to(4) { return }
+    ln = byte_at(WS_BUF, 2) * 256 + byte_at(WS_BUF, 3)
+    hdr = 4
+  } else {
+    if ln == 127 {
+      if !ws_fill_to(10) { return }
+      ln = 0
+      j := 2
+      for j < 10 { ln = ln * 256 + byte_at(WS_BUF, j)  j = j + 1 }
+      hdr = 10
+    }
+  }
+  mlen := 0
+  if masked { mlen = 4 }
+  total := hdr + mlen + ln
+  if !ws_fill_to(total) { return }
+  ph := hdr + mlen
+  payload := bytes_sub(WS_BUF, ph, ph + ln)
+  WS_BUF = bytes_sub(WS_BUF, total, len(WS_BUF))
+  if opcode == 8 { ok = false  return }
+  if opcode == 9 { ws_send_op(10, payload)  m2, o2 := ws_recv_text()  msg = m2  ok = o2  return }
+  if opcode == 10 { m3, o3 := ws_recv_text()  msg = m3  ok = o3  return }
+  msg = bytes_str(payload)
+  ok = true
+}
+
+func ws_connect(url) (ok) {
+  ok = false
+  rest := url
+  if has_prefix(url, "ws://") { rest = substr(url, 5, len(url)) }
+  slash := index(rest, "/")
+  hostport := rest
+  path := "/"
+  if slash >= 0 { hostport = substr(rest, 0, slash)  path = substr(rest, slash, len(rest)) }
+  host := hostport
+  port := 80
+  colon := index(hostport, ":")
+  if colon >= 0 { host = substr(hostport, 0, colon)  port = parse_int(substr(hostport, colon+1, len(hostport))) }
+  fd := dial(host, port)
+  if fd <= 0 { return }
+  ws_reset(fd)
+  req := "GET " + path + " HTTP/1.1\r\nHost: " + host + ":" + str(port) +
+         "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+  if write(fd, req) <= 0 { return }
+  term := bytes("\r\n\r\n")
+  for bytes_index(WS_BUF, term, 0) < 0 {
+    chunk := read_bytes(fd)
+    if len(chunk) == 0 { return }
+    WS_BUF = bytes_concat(WS_BUF, chunk)
+  }
+  p := bytes_index(WS_BUF, term, 0)
+  hdrs := bytes_str(bytes_sub(WS_BUF, 0, p))
+  if !contains(hdrs, "101") { return }
+  WS_BUF = bytes_sub(WS_BUF, p + 4, len(WS_BUF))
+  ok = true
+}

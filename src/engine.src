@@ -20,8 +20,120 @@ func light_fetch(url) (p) {
   p = Page{ len(err) == 0, status, url, url, ctype, body, err }
 }
 
+// ---- heavy engine: real Chrome via CDP (launch locally, or attach to any
+// CDP endpoint via FURET_CDP_URL / FURET_CDP_HTTP — the production stealth path:
+// point furet at a real desktop Chrome or a remote browser). ----
+
+func find_ws_url(js) (url) {
+  url = ""
+  key := "\"webSocketDebuggerUrl\":\""
+  parts := split(js, key)
+  best := ""
+  i := 1
+  for i < len(parts) {
+    e := index(parts[i], "\"")
+    if e >= 0 {
+      u := substr(parts[i], 0, e)
+      if len(best) == 0 { best = u }
+      if contains(u, "/devtools/page/") { url = u  return }
+    }
+    i = i + 1
+  }
+  url = best
+}
+
+func heavy_launch() (base) {
+  base = ""
+  dir := "/tmp/furet-chrome"
+  system("rm -rf " + dir + " && mkdir -p " + dir)
+  pre := ""
+  if len(env("DISPLAY")) == 0 { pre = "xvfb-run -a --server-args=\"-screen 0 1920x1080x24\" " }
+  cmd := "setsid " + pre + "google-chrome --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1" +
+         " --remote-allow-origins=* --user-data-dir=" + dir +
+         " --no-first-run --no-default-browser-check --disable-blink-features=AutomationControlled" +
+         " --lang=fr-FR --window-size=1600,1000 about:blank </dev/null >/tmp/furet-chrome.log 2>&1 &"
+  system(cmd)
+  b := "http://127.0.0.1:9222"
+  k := 0
+  for k < 40 {
+    status, _, e := http_get(b + "/json/version")
+    if len(e) == 0 && status == 200 { base = b  return }
+    sleep(500)
+    k = k + 1
+  }
+}
+
+func heavy_ws_url() (url, errmsg) {
+  url = ""
+  errmsg = ""
+  direct := env("FURET_CDP_URL")
+  if len(direct) > 0 { url = direct  return }
+  base := env("FURET_CDP_HTTP")
+  if len(base) == 0 {
+    base = heavy_launch()
+    if len(base) == 0 { errmsg = "heavy: could not start Chrome (set FURET_CDP_URL to attach to a browser)"  return }
+  }
+  status, body, e := http_get(base + "/json")
+  if len(e) > 0 || status != 200 { errmsg = "heavy: cannot reach CDP at " + base + "/json (" + e + ")"  return }
+  url = find_ws_url(body)
+  if len(url) == 0 { errmsg = "heavy: no page target at " + base }
+}
+
+// heavy_run: connect CDP, navigate, run an (async) JS extractor, return its
+// JSON value. settle_ms is the post-navigate wait before evaluating.
+func heavy_run(url, js, settle_ms) (ok, value, errmsg) {
+  ok = false
+  value = ""
+  errmsg = ""
+  wsurl, e := heavy_ws_url()
+  if len(e) > 0 { errmsg = e  return }
+  if !ws_connect(wsurl) { errmsg = "heavy: cannot connect CDP websocket " + wsurl  return }
+  cdp_call("Page.enable", "")
+  cdp_call("Runtime.enable", "")
+  cdp_call("Page.navigate", "{\"url\":" + jstr(url) + "}")
+  sleep(settle_ms)
+  v, ee := cdp_eval(js, true)
+  ws_close()
+  if len(ee) > 0 { errmsg = ee  return }
+  value = v
+  ok = true
+}
+
+// kept for the light path's Page shape; heavy commands use heavy_run directly.
 func heavy_fetch(url) (p) {
-  p = Page{ false, 0, url, url, "", "", "engine 'heavy' (chrome-in-xvfb) not yet implemented" }
+  p = Page{ false, 0, url, url, "", "", "engine 'heavy': use fetch/extract/eval/maps (they drive CDP), not the light Page path" }
+}
+
+// the Google Maps scraping recipe: dismiss consent, scroll the results feed
+// until enough place cards load, then map each to {name,url}.
+func maps_recipe() (js) {
+  js = "(async()=>{" +
+       "const sleep=ms=>new Promise(r=>setTimeout(r,ms));" +
+       "await sleep(1500);" +
+       "const cbtn=[...document.querySelectorAll('button,[role=\"button\"]')].find(b=>/tout accepter|accept all|j.accepte|agree/i.test(b.textContent||''));" +
+       "if(cbtn){cbtn.click(); await sleep(2000);}" +
+       "let last=0,stale=0;" +
+       "for(let k=0;k<80 && document.querySelectorAll('a.hfpxzc').length<120 && stale<8;k++){" +
+       "const sc=document.querySelector('[role=\"feed\"]')||document.scrollingElement;" +
+       "if(sc){sc.scrollTop=sc.scrollHeight;}" +
+       "await sleep(1300);" +
+       "const n=document.querySelectorAll('a.hfpxzc').length; stale=(n===last)?stale+1:0; last=n;}" +
+       "return [...document.querySelectorAll('a.hfpxzc')].map(a=>({name:a.getAttribute('aria-label')||'',url:a.href}));" +
+       "})()"
+}
+
+func cmd_maps(engine, query) (code) {
+  murl := "https://www.google.com/maps/search/" + replace(query, " ", "+") + "?hl=fr"
+  if engine != "heavy" {
+    emit_err(engine, "maps", murl, 0, "maps requires --heavy (Google Maps is JS-rendered + anti-bot; needs a real browser)")
+    code = 1
+    return
+  }
+  wrap := "(async()=>{ const r = await (" + maps_recipe() + "); return {count:r.length, items:r}; })()"
+  ok, val, err := heavy_run(murl, wrap, 3000)
+  if !ok { emit_err("heavy", "maps", murl, 0, err)  code = 1  return }
+  emit("heavy", "maps", murl, 200, true, val, "")
+  code = 0
 }
 
 func engine_fetch(engine, url) (p) {
@@ -221,7 +333,13 @@ func cmd_attr(engine, url, sel, name) (code) {
 }
 
 func cmd_eval(engine, url, js) (code) {
-  if engine == "heavy" { emit_err(engine, "eval", url, 0, "engine 'heavy' (chrome-in-xvfb) not yet implemented")  code = 1  return }
+  if engine == "heavy" {
+    ok, val, err := heavy_run(url, "(" + js + ")", 2500)
+    if !ok { emit_err("heavy", "eval", url, 0, err)  code = 1  return }
+    emit("heavy", "eval", url, 200, true, "{\"result\":" + val + "}", "")
+    code = 0
+    return
+  }
   p := engine_fetch(engine, url)
   if !p.ok { emit_err(engine, "eval", url, p.status, p.err)  code = 1  return }
   d := parse_html(p.body)
@@ -243,7 +361,14 @@ func cmd_eval(engine, url, js) (code) {
 // and emit it as structured JSON ({count, items}). This is the workhorse for
 // scraping N records with document.querySelectorAll + element.textContent.
 func cmd_extract(engine, url, js) (code) {
-  if engine == "heavy" { emit_err(engine, "extract", url, 0, "engine 'heavy' (chrome-in-xvfb) not yet implemented")  code = 1  return }
+  if engine == "heavy" {
+    wrap := "(async()=>{ const r = await (" + js + "); return Array.isArray(r)?{count:r.length,items:r}:{count:(r==null?0:1),items:r}; })()"
+    ok, val, err := heavy_run(url, wrap, 2500)
+    if !ok { emit_err("heavy", "extract", url, 0, err)  code = 1  return }
+    emit("heavy", "extract", url, 200, true, val, "")
+    code = 0
+    return
+  }
   p := engine_fetch(engine, url)
   if !p.ok { emit_err(engine, "extract", url, p.status, p.err)  code = 1  return }
   d := parse_html(p.body)

@@ -1,0 +1,39 @@
+// cdp.src — the Chrome DevTools Protocol over the plain WebSocket client.
+// Send {id,method,params}; read frames until the matching id, skipping events.
+
+var CDP_ID = 0
+
+func cdp_call(method, params_json) (result) {
+  CDP_ID = CDP_ID + 1
+  id := CDP_ID
+  msg := "{\"id\":" + str(id) + ",\"method\":\"" + method + "\""
+  if len(params_json) > 0 { msg = msg + ",\"params\":" + params_json }
+  msg = msg + "}"
+  result = ""
+  if !ws_send_text(msg) { return }
+  want := "{\"id\":" + str(id)
+  k := 0
+  for k < 200000 {
+    m, ok := ws_recv_text()
+    if !ok { result = ""  return }
+    if has_prefix(m, want + ",") || has_prefix(m, want + "}") { result = m  return }
+    k = k + 1
+  }
+}
+
+// cdp_eval runs JS in the page. returnByValue serializes the result; awaitPromise
+// resolves an async extractor (the Maps scroll loop). Returns (value_json, err).
+func cdp_eval(js, await) (value, errmsg) {
+  value = ""
+  errmsg = ""
+  params := "{\"expression\":" + jstr(js) + ",\"returnByValue\":true,\"userGesture\":true"
+  if await { params = params + ",\"awaitPromise\":true" }
+  params = params + "}"
+  res := cdp_call("Runtime.evaluate", params)
+  if len(res) == 0 { errmsg = "cdp: no response to Runtime.evaluate"  return }
+  extext, e1 := json_get(res, ".result.exceptionDetails.text")
+  if len(e1) == 0 && len(extext) > 0 { errmsg = "js exception: " + extext  return }
+  v, e2 := json_get(res, ".result.result.value")
+  if len(e2) > 0 { value = ""  return }
+  value = v
+}
