@@ -119,37 +119,30 @@ func is_block(tag) (b) {
 }
 
 func subtree_text(d, idx) (out) {
-  out = ""
   if d.nodes[idx].kind == nk_text() { out = d.nodes[idx].text  return }
   t := d.nodes[idx].tag
-  if t == "script" || t == "style" { return }
+  if t == "script" || t == "style" { out = ""  return }
+  parts := []string{}
   for _, k := range d.nodes[idx].kids {
     kt := subtree_text(d, k)
     if d.nodes[k].kind == nk_elem() && is_block(d.nodes[k].tag) {
-      out = out + " " + kt + " "
+      parts = append(parts, " ")
+      parts = append(parts, kt)
+      parts = append(parts, " ")
     } else {
-      out = out + kt
+      parts = append(parts, kt)
     }
   }
+  out = join(parts, "")
 }
 
 func collapse_ws(s) (out) {
-  out = ""
-  prev_ws := true
-  i := 0
-  n := len(s)
-  for i < n {
-    c := charat(s, i)
-    if is_ws(c) {
-      if !prev_ws { out = out + " " }
-      prev_ws = true
-    } else {
-      out = out + c
-      prev_ws = false
-    }
-    i = i + 1
-  }
-  out = trim(out)
+  t := replace(s, "\n", " ")
+  t = replace(t, "\t", " ")
+  t = replace(t, "\r", " ")
+  parts := []string{}
+  for _, w := range split(t, " ") { if len(w) > 0 { parts = append(parts, w) } }
+  out = join(parts, " ")
 }
 
 func node_text(d, idx) (out) { out = collapse_ws(subtree_text(d, idx)) }

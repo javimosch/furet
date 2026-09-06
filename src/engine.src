@@ -12,7 +12,8 @@ type Page struct { ok bool  status int  url string  final_url string  ctype stri
 // ---- engine dispatch ----
 
 func light_fetch(url) (p) {
-  status, body, err := http_get(url)
+  status, raw, err := http_get(url)
+  body := to_utf8(raw)
   ctype := ""
   low := to_lower(body)
   if contains(low, "<html") || contains(low, "<!doctype html") { ctype = "text/html" }
@@ -40,6 +41,47 @@ func jesc(s) (out) {
 }
 func jstr(s) (out) { out = "\"" + jesc(s) + "\"" }
 func jbool(b) (out) { out = "false"  if b { out = "true" } }
+
+// serialize the DOM arena to a compact JSON array for injection into JS.
+func dom_to_json(d) (out) {
+  parts := []string{}
+  parts = append(parts, "[")
+  i := 0
+  for i < len(d.nodes) {
+    if i > 0 { parts = append(parts, ",") }
+    parts = append(parts, "{\"k\":" + str(d.nodes[i].kind) + ",\"t\":" + jstr(d.nodes[i].tag) + ",\"x\":" + jstr(d.nodes[i].text) + ",\"a\":[")
+    j := 0
+    for j < len(d.nodes[i].attrs) {
+      if j > 0 { parts = append(parts, ",") }
+      parts = append(parts, "[" + jstr(d.nodes[i].attrs[j].name) + "," + jstr(d.nodes[i].attrs[j].val) + "]")
+      j = j + 1
+    }
+    parts = append(parts, "],\"c\":[")
+    k := 0
+    for k < len(d.nodes[i].kids) {
+      if k > 0 { parts = append(parts, ",") }
+      parts = append(parts, str(d.nodes[i].kids[k]))
+      k = k + 1
+    }
+    parts = append(parts, "]}")
+    i = i + 1
+  }
+  parts = append(parts, "]")
+  out = join(parts, "")
+}
+
+// stand up a JS context with a real `document` over the fetched page + a `page` object.
+func js_setup(e, d, url, status, body) {
+  db_eval(e, "globalThis.__NODES = " + dom_to_json(d) + ";")
+  db_eval(e, dom_shim_js())
+  db_set(e, "url", url)
+  db_set(e, "status", str(status))
+  // title/text are lazy JS getters over the real document so huge pages do not
+  // pay a full-document text pass unless the caller actually reads them.
+  db_eval(e, "var page = { url: dom.get('url'), status:+dom.get('status')," +
+             " get title(){ return document.title; }," +
+             " get text(){ return document.body ? document.body.textContent : ''; } };")
+}
 
 // emit the envelope. `data` is already-formed JSON (object/array/null).
 func emit(engine, cmd, url, status, ok, data, errmsg) {
@@ -185,16 +227,8 @@ func cmd_eval(engine, url, js) (code) {
   d := parse_html(p.body)
   e := db_new()
   if e == 0 { emit_err(engine, "eval", url, p.status, "js engine failed to start")  code = 1  return }
-  // expose the fetched page to JS via the bound `dom` store.
-  db_set(e, "url", url)
-  db_set(e, "status", str(p.status))
-  db_set(e, "title", dom_title(d))
-  db_set(e, "text", dom_text(d))
-  db_set(e, "html", p.body)
-  // convenience: a `page` object over the store, then run the user's expression.
-  prelude := "var page = { url: dom.get('url'), status: +dom.get('status')," +
-             " title: dom.get('title'), text: dom.get('text'), html: dom.get('html') };"
-  res := db_eval(e, prelude + "\n" + js)
+  js_setup(e, d, url, p.status, p.body)
+  res := db_eval(e, js)
   db_free(e)
   if has_prefix(res, "ERR: ") {
     emit_err(engine, "eval", url, p.status, substr(res, 5, len(res)))
@@ -202,5 +236,28 @@ func cmd_eval(engine, url, js) (code) {
     return
   }
   emit(engine, "eval", url, p.status, true, "{\"result\":" + jstr(res) + "}", "")
+  code = 0
+}
+
+// extract: run a JS expression that returns an array/value over the real DOM,
+// and emit it as structured JSON ({count, items}). This is the workhorse for
+// scraping N records with document.querySelectorAll + element.textContent.
+func cmd_extract(engine, url, js) (code) {
+  if engine == "heavy" { emit_err(engine, "extract", url, 0, "engine 'heavy' (chrome-in-xvfb) not yet implemented")  code = 1  return }
+  p := engine_fetch(engine, url)
+  if !p.ok { emit_err(engine, "extract", url, p.status, p.err)  code = 1  return }
+  d := parse_html(p.body)
+  e := db_new()
+  if e == 0 { emit_err(engine, "extract", url, p.status, "js engine failed to start")  code = 1  return }
+  js_setup(e, d, url, p.status, p.body)
+  wrap := "(function(){ var r = (" + js + "); if (Array.isArray(r)) return JSON.stringify({count:r.length,items:r}); return JSON.stringify({count:(r==null?0:1),items:r}); })()"
+  res := db_eval(e, wrap)
+  db_free(e)
+  if has_prefix(res, "ERR: ") {
+    emit_err(engine, "extract", url, p.status, substr(res, 5, len(res)))
+    code = 1
+    return
+  }
+  emit(engine, "extract", url, p.status, true, res, "")
   code = 0
 }

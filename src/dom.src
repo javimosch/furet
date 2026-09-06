@@ -151,6 +151,47 @@ func parse_attrs(html, i, elemIdx) (ni, selfclose) {
   ni = i
 }
 
+// find_str: naive substring search from offset `from`, NO tail allocation
+// (unlike substr+index). needle is tiny (">","-->","</tag") so this is ~linear.
+func find_str(html, needle, from) (pos) {
+  n := len(html)
+  m := len(needle)
+  pos = -1
+  p := from
+  if p < 0 { p = 0 }
+  if m == 0 { pos = p  return }
+  for p + m <= n {
+    k := 0
+    for k < m {
+      if charat(html, p+k) != charat(needle, k) { break }
+      k = k + 1
+    }
+    if k == m { pos = p  return }
+    p = p + 1
+  }
+}
+
+// find_close: locate "</tag" (case-insensitive) from `from`, no full-doc lowercase.
+// tag is already lowercase.
+func find_close(html, from, tag) (pos) {
+  n := len(html)
+  tl := len(tag)
+  pos = -1
+  p := from
+  for p + tl + 2 <= n {
+    if charat(html, p) == "<" && charat(html, p+1) == "/" {
+      ok := true
+      j := 0
+      for j < tl {
+        if to_lower(charat(html, p+2+j)) != charat(tag, j) { ok = false  break }
+        j = j + 1
+      }
+      if ok { pos = p  return }
+    }
+    p = p + 1
+  }
+}
+
 func rawtext_value(tag, raw) (out) {
   out = raw
   if tag == "title" || tag == "textarea" { out = decode_entities(raw) }
@@ -159,17 +200,13 @@ func rawtext_value(tag, raw) (out) {
 // read raw text until the matching </tag> (case-insensitive). Returns newi past close.
 func read_rawtext(html, i, tag) (ni) {
   n := len(html)
-  needle := "</" + tag
-  start := i
-  low := to_lower(html)
-  pos := index_from(low, needle, i)
+  pos := find_close(html, i, tag)
   if pos < 0 {
-    add_text(rawtext_value(tag, substr(html, start, n)))
+    add_text(rawtext_value(tag, substr(html, i, n)))
     ni = n
     return
   }
-  add_text(rawtext_value(tag, substr(html, start, pos)))
-  // advance past '>' of the closing tag
+  add_text(rawtext_value(tag, substr(html, i, pos)))
   j := pos
   for j < n && charat(html, j) != ">" { j = j + 1 }
   if j < n { j = j + 1 }
@@ -200,16 +237,16 @@ func parse_html(html) (d) {
       nx := charat(html, i+1)
       if nx == "!" {
         if i+3 < n && substr(html, i, i+4) == "<!--" {
-          end := index_from(html, "-->", i+4)
+          end := find_str(html, "-->", i+4)
           if end < 0 { i = n } else { i = end + 3 }
         } else {
-          end := index_from(html, ">", i)
+          end := find_str(html, ">", i)
           if end < 0 { i = n } else { i = end + 1 }
         }
       } else {
         if nx == "/" {
           nm, ni := read_name(html, i+2)
-          end := index_from(html, ">", ni)
+          end := find_str(html, ">", ni)
           if end < 0 { i = n } else { i = end + 1 }
           pop_to(to_lower(nm))
         } else {

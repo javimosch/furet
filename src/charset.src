@@ -1,0 +1,45 @@
+// charset.src — make furet's output valid UTF-8 regardless of the page's encoding.
+// http_get gives no response headers, so we sniff <meta charset> from the head.
+// ISO-8859-1 / latin-1 / windows-1252 pages are transcoded to UTF-8 up front, so
+// the DOM parse, the JS injection, and the JSON envelope are all clean UTF-8.
+
+func detect_charset(body) (cs) {
+  cs = "utf-8"
+  head := body
+  if len(head) > 4096 { head = substr(body, 0, 4096) }
+  low := to_lower(head)
+  if contains(low, "charset=iso-8859-1") || contains(low, "charset=\"iso-8859-1\"") ||
+     contains(low, "charset=iso-8859-15") || contains(low, "charset=windows-1252") ||
+     contains(low, "charset=latin-1") || contains(low, "charset=latin1") {
+    cs = "latin-1"
+  }
+}
+
+// latin1_to_utf8: bytes < 128 pass through (accumulated in runs); each byte
+// 0x80..0xFF expands to its 2-byte UTF-8 form, sliced from the generated table
+// (latin1_hi_bytes(), 128 two-byte sequences built via from_hex).
+func latin1_to_utf8(s) (out) {
+  tbl := latin1_hi_bytes()
+  bs := bytes(s)
+  parts := []string{}
+  n := len(s)
+  i := 0
+  run := 0
+  for i < n {
+    b := byte_at(bs, i)
+    if b >= 128 {
+      if i > run { parts = append(parts, substr(s, run, i)) }
+      off := (b - 128) * 2
+      parts = append(parts, bytes_str(bytes_sub(tbl, off, off+2)))
+      run = i + 1
+    }
+    i = i + 1
+  }
+  if n > run { parts = append(parts, substr(s, run, n)) }
+  out = join(parts, "")
+}
+
+func to_utf8(body) (out) {
+  out = body
+  if detect_charset(body) == "latin-1" { out = latin1_to_utf8(body) }
+}
