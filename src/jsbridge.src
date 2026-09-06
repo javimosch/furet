@@ -1,0 +1,14 @@
+// jsbridge.src — the light engine's JavaScript core: QuickJS embedded via the
+// machin C FFI, through the dombridge shim. A `dom` global (get/set) backed by a
+// host store lets fetched-page data cross into JS. Relative paths resolve from
+// the repo root, so build furet from there (build.sh does).
+extern "dombridge" {
+  cflags "-Ivendor/qjs -Lvendor/qjs"
+  header "dombridge.h"
+  link "qjs" link "m" link "pthread"
+  fn db_new() ptr
+  fn db_set(ptr, string, string)
+  fn db_get(ptr, string) string
+  fn db_eval(ptr, string) string
+  fn db_free(ptr)
+}

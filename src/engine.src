@@ -1,0 +1,206 @@
+// engine.src — furet's engine abstraction + the agent-facing JSON envelope.
+//
+// Every command produces the SAME Result shape regardless of which engine ran
+// it. That uniform envelope is the whole point: an agent can flip --light /
+// --heavy and keep parsing identical output. The light engine is the custom
+// fetch+DOM+JS stack (this file + dom/css + the QuickJS bridge). The heavy
+// engine is a seam for a future chrome-in-xvfb backend; today it returns a
+// clean "unimplemented" so callers can detect and fall back.
+
+type Page struct { ok bool  status int  url string  final_url string  ctype string  body string  err string }
+
+// ---- engine dispatch ----
+
+func light_fetch(url) (p) {
+  status, body, err := http_get(url)
+  ctype := ""
+  low := to_lower(body)
+  if contains(low, "<html") || contains(low, "<!doctype html") { ctype = "text/html" }
+  p = Page{ len(err) == 0, status, url, url, ctype, body, err }
+}
+
+func heavy_fetch(url) (p) {
+  p = Page{ false, 0, url, url, "", "", "engine 'heavy' (chrome-in-xvfb) not yet implemented" }
+}
+
+func engine_fetch(engine, url) (p) {
+  if engine == "heavy" { p = heavy_fetch(url) } else { p = light_fetch(url) }
+}
+
+func engine_known(engine) (b) { b = engine == "light" || engine == "heavy" }
+
+// ---- JSON helpers (hand-rolled so `data` can hold raw JSON) ----
+
+func jesc(s) (out) {
+  out = replace(s, "\\", "\\\\")
+  out = replace(out, "\"", "\\\"")
+  out = replace(out, "\n", "\\n")
+  out = replace(out, "\r", "\\r")
+  out = replace(out, "\t", "\\t")
+}
+func jstr(s) (out) { out = "\"" + jesc(s) + "\"" }
+func jbool(b) (out) { out = "false"  if b { out = "true" } }
+
+// emit the envelope. `data` is already-formed JSON (object/array/null).
+func emit(engine, cmd, url, status, ok, data, errmsg) {
+  s := "{"
+  s = s + "\"ok\":" + jbool(ok)
+  s = s + ",\"engine\":" + jstr(engine)
+  s = s + ",\"cmd\":" + jstr(cmd)
+  s = s + ",\"url\":" + jstr(url)
+  s = s + ",\"status\":" + str(status)
+  s = s + ",\"data\":" + data
+  s = s + ",\"error\":" + jstr(errmsg)
+  s = s + "}"
+  println(s)
+}
+
+func emit_err(engine, cmd, url, status, errmsg) {
+  emit(engine, cmd, url, status, false, "null", errmsg)
+}
+
+// ---- url resolution (relative -> absolute) ----
+
+func url_scheme_host(base) (scheme, host, ok) {
+  scheme = ""
+  host = ""
+  ok = false
+  p := index(base, "://")
+  if p < 0 { return }
+  scheme = substr(base, 0, p)
+  rest := substr(base, p+3, len(base))
+  slash := index(rest, "/")
+  if slash < 0 { host = rest } else { host = substr(rest, 0, slash) }
+  ok = true
+}
+
+func url_resolve(base, href) (out) {
+  out = href
+  if len(href) == 0 { return }
+  if has_prefix(href, "http://") || has_prefix(href, "https://") { return }
+  scheme, host, ok := url_scheme_host(base)
+  if !ok { return }
+  if has_prefix(href, "//") { out = scheme + ":" + href  return }
+  if has_prefix(href, "/") { out = scheme + "://" + host + href  return }
+  // relative to the base directory
+  dir := base
+  q := index(dir, "?")
+  if q >= 0 { dir = substr(dir, 0, q) }
+  cut := last_index(dir, "/")
+  if cut > index(dir, "://")+2 { dir = substr(dir, 0, cut+1) } else { dir = scheme + "://" + host + "/" }
+  out = dir + href
+}
+
+func last_index(s, sub) (pos) {
+  pos = -1
+  i := 0
+  for i < len(s) {
+    if i + len(sub) <= len(s) && substr(s, i, i+len(sub)) == sub { pos = i }
+    i = i + 1
+  }
+}
+
+// ---- commands (light engine; heavy short-circuits on p.err) ----
+
+func cmd_fetch(engine, url) (code) {
+  p := engine_fetch(engine, url)
+  if !p.ok { emit_err(engine, "fetch", url, p.status, p.err)  code = 1  return }
+  d := parse_html(p.body)
+  data := "{\"bytes\":" + str(len(p.body)) + ",\"content_type\":" + jstr(p.ctype) +
+          ",\"title\":" + jstr(dom_title(d)) + "}"
+  emit(engine, "fetch", url, p.status, true, data, "")
+  code = 0
+}
+
+func cmd_html(engine, url) (code) {
+  p := engine_fetch(engine, url)
+  if !p.ok { emit_err(engine, "html", url, p.status, p.err)  code = 1  return }
+  emit(engine, "html", url, p.status, true, "{\"html\":" + jstr(p.body) + "}", "")
+  code = 0
+}
+
+func cmd_text(engine, url, sel) (code) {
+  p := engine_fetch(engine, url)
+  if !p.ok { emit_err(engine, "text", url, p.status, p.err)  code = 1  return }
+  d := parse_html(p.body)
+  if len(sel) == 0 {
+    emit(engine, "text", url, p.status, true, "{\"text\":" + jstr(dom_text(d)) + "}", "")
+    code = 0
+    return
+  }
+  arr := "["
+  first := true
+  for _, i := range find_all(d, sel) {
+    if !first { arr = arr + "," }
+    arr = arr + jstr(node_text(d, i))
+    first = false
+  }
+  arr = arr + "]"
+  emit(engine, "text", url, p.status, true, "{\"selector\":" + jstr(sel) + ",\"matches\":" + arr + "}", "")
+  code = 0
+}
+
+func cmd_links(engine, url) (code) {
+  p := engine_fetch(engine, url)
+  if !p.ok { emit_err(engine, "links", url, p.status, p.err)  code = 1  return }
+  d := parse_html(p.body)
+  arr := "["
+  first := true
+  for _, i := range find_all(d, "a") {
+    href := get_attr(d, i, "href")
+    if len(href) == 0 { continue }
+    if !first { arr = arr + "," }
+    arr = arr + "{\"href\":" + jstr(href) +
+          ",\"abs\":" + jstr(url_resolve(url, href)) +
+          ",\"text\":" + jstr(node_text(d, i)) + "}"
+    first = false
+  }
+  arr = arr + "]"
+  emit(engine, "links", url, p.status, true, "{\"links\":" + arr + "}", "")
+  code = 0
+}
+
+func cmd_attr(engine, url, sel, name) (code) {
+  p := engine_fetch(engine, url)
+  if !p.ok { emit_err(engine, "attr", url, p.status, p.err)  code = 1  return }
+  d := parse_html(p.body)
+  arr := "["
+  first := true
+  for _, i := range find_all(d, sel) {
+    if !has_attr(d, i, name) { continue }
+    if !first { arr = arr + "," }
+    arr = arr + jstr(get_attr(d, i, name))
+    first = false
+  }
+  arr = arr + "]"
+  emit(engine, "attr", url, p.status, true,
+       "{\"selector\":" + jstr(sel) + ",\"name\":" + jstr(name) + ",\"values\":" + arr + "}", "")
+  code = 0
+}
+
+func cmd_eval(engine, url, js) (code) {
+  if engine == "heavy" { emit_err(engine, "eval", url, 0, "engine 'heavy' (chrome-in-xvfb) not yet implemented")  code = 1  return }
+  p := engine_fetch(engine, url)
+  if !p.ok { emit_err(engine, "eval", url, p.status, p.err)  code = 1  return }
+  d := parse_html(p.body)
+  e := db_new()
+  if e == 0 { emit_err(engine, "eval", url, p.status, "js engine failed to start")  code = 1  return }
+  // expose the fetched page to JS via the bound `dom` store.
+  db_set(e, "url", url)
+  db_set(e, "status", str(p.status))
+  db_set(e, "title", dom_title(d))
+  db_set(e, "text", dom_text(d))
+  db_set(e, "html", p.body)
+  // convenience: a `page` object over the store, then run the user's expression.
+  prelude := "var page = { url: dom.get('url'), status: +dom.get('status')," +
+             " title: dom.get('title'), text: dom.get('text'), html: dom.get('html') };"
+  res := db_eval(e, prelude + "\n" + js)
+  db_free(e)
+  if has_prefix(res, "ERR: ") {
+    emit_err(engine, "eval", url, p.status, substr(res, 5, len(res)))
+    code = 1
+    return
+  }
+  emit(engine, "eval", url, p.status, true, "{\"result\":" + jstr(res) + "}", "")
+  code = 0
+}

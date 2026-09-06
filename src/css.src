@@ -1,0 +1,163 @@
+// css.src — a CSS-lite selector engine + text extraction over the DOM arena.
+//
+// Supported: type (tag / *), #id, .class, [attr] presence, compound
+// (div.card#main[data-x]), and the descendant combinator (space-separated).
+// That covers the great majority of real scraping selectors. Child (>),
+// sibling (~ +), pseudo-classes, and attribute-value matching are future slices.
+
+type Simple struct { tag string  id string  classes []string  hasAttr string }
+
+func has_attr(d, idx, name) (b) {
+  b = false
+  for _, a := range d.nodes[idx].attrs { if a.name == name { b = true } }
+}
+func get_attr(d, idx, name) (v) {
+  v = ""
+  for _, a := range d.nodes[idx].attrs { if a.name == name { v = a.val } }
+}
+func class_list(d, idx) (out) {
+  out = []string{}
+  cls := get_attr(d, idx, "class")
+  for _, c := range split(cls, " ") { if len(trim(c)) > 0 { out = append(out, trim(c)) } }
+}
+func has_class(d, idx, want) (b) {
+  b = false
+  for _, c := range class_list(d, idx) { if c == want { b = true } }
+}
+
+func parse_simple(tok) (s) {
+  s = Simple{"", "", []string{}, ""}
+  n := len(tok)
+  i := 0
+  // leading type selector
+  ts := 0
+  for i < n {
+    c := charat(tok, i)
+    if c == "#" || c == "." || c == "[" { break }
+    i = i + 1
+  }
+  s.tag = to_lower(substr(tok, ts, i))
+  for i < n {
+    c := charat(tok, i)
+    if c == "#" {
+      i = i + 1
+      st := i
+      for i < n && charat(tok, i) != "#" && charat(tok, i) != "." && charat(tok, i) != "[" { i = i + 1 }
+      s.id = substr(tok, st, i)
+    } else {
+      if c == "." {
+        i = i + 1
+        st := i
+        for i < n && charat(tok, i) != "#" && charat(tok, i) != "." && charat(tok, i) != "[" { i = i + 1 }
+        s.classes = append(s.classes, substr(tok, st, i))
+      } else {
+        if c == "[" {
+          i = i + 1
+          st := i
+          for i < n && charat(tok, i) != "]" { i = i + 1 }
+          s.hasAttr = to_lower(substr(tok, st, i))
+          if i < n { i = i + 1 }
+        } else {
+          i = i + 1
+        }
+      }
+    }
+  }
+}
+
+func parse_selector(sel) (chain) {
+  chain = []Simple{}
+  for _, tok := range split(trim(sel), " ") {
+    t := trim(tok)
+    if len(t) > 0 { chain = append(chain, parse_simple(t)) }
+  }
+}
+
+func match_simple(d, idx, s) (b) {
+  b = true
+  if d.nodes[idx].kind != nk_elem() { b = false  return }
+  if len(s.tag) > 0 && s.tag != "*" && s.tag != d.nodes[idx].tag { b = false  return }
+  if len(s.id) > 0 && get_attr(d, idx, "id") != s.id { b = false  return }
+  for _, c := range s.classes { if !has_class(d, idx, c) { b = false } }
+  if len(s.hasAttr) > 0 && !has_attr(d, idx, s.hasAttr) { b = false }
+}
+
+func matches_chain(d, idx, chain, ci) (b) {
+  b = false
+  if !match_simple(d, idx, chain[ci]) { return }
+  if ci == 0 { b = true  return }
+  p := d.nodes[idx].parent
+  for p >= 0 {
+    if matches_chain(d, p, chain, ci-1) { b = true  return }
+    p = d.nodes[p].parent
+  }
+}
+
+func find_all(d, sel) (out) {
+  out = []int{}
+  chain := parse_selector(sel)
+  if len(chain) == 0 { return }
+  last := len(chain) - 1
+  i := 0
+  for i < len(d.nodes) {
+    if d.nodes[i].kind == nk_elem() && d.nodes[i].tag != "#root" {
+      if matches_chain(d, i, chain, last) { out = append(out, i) }
+    }
+    i = i + 1
+  }
+}
+
+// ---- text extraction ----
+
+func is_block(tag) (b) {
+  b = tag == "div" || tag == "p" || tag == "section" || tag == "article" ||
+      tag == "header" || tag == "footer" || tag == "main" || tag == "aside" ||
+      tag == "nav" || tag == "ul" || tag == "ol" || tag == "li" || tag == "table" ||
+      tag == "tr" || tag == "h1" || tag == "h2" || tag == "h3" || tag == "h4" ||
+      tag == "h5" || tag == "h6" || tag == "br" || tag == "hr" || tag == "blockquote" ||
+      tag == "pre" || tag == "figure"
+}
+
+func subtree_text(d, idx) (out) {
+  out = ""
+  if d.nodes[idx].kind == nk_text() { out = d.nodes[idx].text  return }
+  t := d.nodes[idx].tag
+  if t == "script" || t == "style" { return }
+  for _, k := range d.nodes[idx].kids {
+    kt := subtree_text(d, k)
+    if d.nodes[k].kind == nk_elem() && is_block(d.nodes[k].tag) {
+      out = out + " " + kt + " "
+    } else {
+      out = out + kt
+    }
+  }
+}
+
+func collapse_ws(s) (out) {
+  out = ""
+  prev_ws := true
+  i := 0
+  n := len(s)
+  for i < n {
+    c := charat(s, i)
+    if is_ws(c) {
+      if !prev_ws { out = out + " " }
+      prev_ws = true
+    } else {
+      out = out + c
+      prev_ws = false
+    }
+    i = i + 1
+  }
+  out = trim(out)
+}
+
+func node_text(d, idx) (out) { out = collapse_ws(subtree_text(d, idx)) }
+
+func dom_text(d) (out) { out = node_text(d, 0) }
+
+func dom_title(d) (out) {
+  out = ""
+  hits := find_all(d, "title")
+  if len(hits) > 0 { out = node_text(d, hits[0]) }
+}

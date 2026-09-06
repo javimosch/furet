@@ -1,0 +1,243 @@
+// dom.src — a pragmatic HTML tokenizer + flat DOM arena for furet's light engine.
+//
+// Not a spec-complete HTML5 parser: it handles the shapes real pages use —
+// elements, attributes (quoted/unquoted/bare), text, comments, doctype, void
+// elements, self-closing, and raw-text elements (script/style/title/textarea).
+// Nodes live in a flat arena (indices, not recursive value types) so the tree
+// is cheap to build and walk in MFL.
+
+type Attr struct { name string  val string }
+type Node struct { kind int  tag string  text string  attrs []Attr  parent int  kids []int }
+type Dom  struct { nodes []Node }
+
+// arena + open-element stack live in package globals for the duration of a parse.
+var A   = []Node{}
+var STK = []int{}
+
+func nk_elem() (v) { v = 1 }
+func nk_text() (v) { v = 2 }
+
+func is_ws(c) (b) { b = c == " " || c == "\n" || c == "\t" || c == "\r" }
+func is_name_start(c) (b) {
+  lc := to_lower(c)
+  b = (lc >= "a" && lc <= "z")
+}
+func is_name_char(c) (b) {
+  lc := to_lower(c)
+  b = (lc >= "a" && lc <= "z") || (c >= "0" && c <= "9") || c == "-" || c == "_" || c == ":"
+}
+
+func is_void(tag) (b) {
+  b = tag == "area" || tag == "base" || tag == "br" || tag == "col" || tag == "embed" ||
+      tag == "hr" || tag == "img" || tag == "input" || tag == "link" || tag == "meta" ||
+      tag == "param" || tag == "source" || tag == "track" || tag == "wbr"
+}
+func is_rawtext(tag) (b) {
+  b = tag == "script" || tag == "style" || tag == "title" || tag == "textarea"
+}
+
+func cur_parent() (p) {
+  p = -1
+  if len(STK) > 0 { p = STK[len(STK)-1] }
+}
+func attach(parent, idx) {
+  if parent >= 0 { A[parent].kids = append(A[parent].kids, idx) }
+}
+func push_stk(idx) { STK = append(STK, idx) }
+func pop_stk() {
+  if len(STK) > 0 { STK = STK[0:len(STK)-1] }
+}
+
+// pop the stack until (and including) the nearest open element whose tag == name.
+// tolerant of unbalanced markup: if no match, leaves the stack untouched.
+func pop_to(name) {
+  found := -1
+  i := len(STK) - 1
+  for i >= 0 {
+    if A[STK[i]].tag == name { found = i  i = -1 } else { i = i - 1 }
+  }
+  if found >= 0 {
+    STK = STK[0:found]
+  }
+}
+
+func add_elem(tag) (idx) {
+  idx = len(A)
+  A = append(A, Node{nk_elem(), tag, "", []Attr{}, cur_parent(), []int{}})
+  attach(A[idx].parent, idx)
+}
+func add_text(txt) {
+  if len(txt) == 0 { return }
+  idx := len(A)
+  A = append(A, Node{nk_text(), "", txt, []Attr{}, cur_parent(), []int{}})
+  attach(A[idx].parent, idx)
+}
+
+// decode the common named entities; numeric refs are left as-is for slice one.
+func decode_entities(s) (out) {
+  if index(s, "&") < 0 { out = s  return }
+  out = replace(s, "&amp;", "&")
+  out = replace(out, "&lt;", "<")
+  out = replace(out, "&gt;", ">")
+  out = replace(out, "&quot;", "\"")
+  out = replace(out, "&#39;", "'")
+  out = replace(out, "&apos;", "'")
+  out = replace(out, "&nbsp;", " ")
+}
+
+// read a run of name chars from position i; returns (name, newi).
+func read_name(html, i) (name, ni) {
+  n := len(html)
+  start := i
+  for i < n && is_name_char(charat(html, i)) { i = i + 1 }
+  name = substr(html, start, i)
+  ni = i
+}
+
+func skip_ws(html, i) (ni) {
+  n := len(html)
+  for i < n && is_ws(charat(html, i)) { i = i + 1 }
+  ni = i
+}
+
+// parse the attribute list starting at i (just past the tag name). Appends attrs
+// to the element at elemIdx. Returns (newi, selfclose) with newi just past '>'.
+func parse_attrs(html, i, elemIdx) (ni, selfclose) {
+  n := len(html)
+  selfclose = false
+  for i < n {
+    i = skip_ws(html, i)
+    if i >= n { ni = i  return }
+    c := charat(html, i)
+    if c == ">" { ni = i + 1  return }
+    if c == "/" {
+      // could be '/>'
+      if i+1 < n && charat(html, i+1) == ">" { selfclose = true  ni = i + 2  return }
+      i = i + 1
+      continue
+    }
+    // attribute name
+    aname := ""
+    astart := i
+    for i < n {
+      cc := charat(html, i)
+      if is_ws(cc) || cc == "=" || cc == ">" || cc == "/" { break }
+      i = i + 1
+    }
+    aname = to_lower(substr(html, astart, i))
+    i = skip_ws(html, i)
+    aval := ""
+    if i < n && charat(html, i) == "=" {
+      i = skip_ws(html, i+1)
+      if i < n && (charat(html, i) == "\"" || charat(html, i) == "'") {
+        q := charat(html, i)
+        i = i + 1
+        vstart := i
+        for i < n && charat(html, i) != q { i = i + 1 }
+        aval = substr(html, vstart, i)
+        if i < n { i = i + 1 }
+      } else {
+        vstart := i
+        for i < n {
+          cc := charat(html, i)
+          if is_ws(cc) || cc == ">" { break }
+          i = i + 1
+        }
+        aval = substr(html, vstart, i)
+      }
+    }
+    if len(aname) > 0 { A[elemIdx].attrs = append(A[elemIdx].attrs, Attr{aname, decode_entities(aval)}) }
+  }
+  ni = i
+}
+
+func rawtext_value(tag, raw) (out) {
+  out = raw
+  if tag == "title" || tag == "textarea" { out = decode_entities(raw) }
+}
+
+// read raw text until the matching </tag> (case-insensitive). Returns newi past close.
+func read_rawtext(html, i, tag) (ni) {
+  n := len(html)
+  needle := "</" + tag
+  start := i
+  low := to_lower(html)
+  pos := index_from(low, needle, i)
+  if pos < 0 {
+    add_text(rawtext_value(tag, substr(html, start, n)))
+    ni = n
+    return
+  }
+  add_text(rawtext_value(tag, substr(html, start, pos)))
+  // advance past '>' of the closing tag
+  j := pos
+  for j < n && charat(html, j) != ">" { j = j + 1 }
+  if j < n { j = j + 1 }
+  ni = j
+}
+
+// index of needle in s at or after `from` (MFL `index` has no offset form).
+func index_from(s, needle, from) (pos) {
+  if from <= 0 { pos = index(s, needle)  return }
+  if from >= len(s) { pos = -1  return }
+  sub := substr(s, from, len(s))
+  p := index(sub, needle)
+  if p < 0 { pos = -1 } else { pos = p + from }
+}
+
+func parse_html(html) (d) {
+  A = []Node{}
+  STK = []int{}
+  // synthetic root keeps every top-level node parented.
+  A = append(A, Node{nk_elem(), "#root", "", []Attr{}, -1, []int{}})
+  push_stk(0)
+
+  n := len(html)
+  i := 0
+  for i < n {
+    c := charat(html, i)
+    if c == "<" && i+1 < n {
+      nx := charat(html, i+1)
+      if nx == "!" {
+        if i+3 < n && substr(html, i, i+4) == "<!--" {
+          end := index_from(html, "-->", i+4)
+          if end < 0 { i = n } else { i = end + 3 }
+        } else {
+          end := index_from(html, ">", i)
+          if end < 0 { i = n } else { i = end + 1 }
+        }
+      } else {
+        if nx == "/" {
+          nm, ni := read_name(html, i+2)
+          end := index_from(html, ">", ni)
+          if end < 0 { i = n } else { i = end + 1 }
+          pop_to(to_lower(nm))
+        } else {
+          if is_name_start(nx) {
+            tag, ni := read_name(html, i+1)
+            tag = to_lower(tag)
+            idx := add_elem(tag)
+            ni2, selfclose := parse_attrs(html, ni, idx)
+            i = ni2
+            if is_rawtext(tag) && !selfclose {
+              push_stk(idx)
+              i = read_rawtext(html, i, tag)
+              pop_stk()
+            } else {
+              if !is_void(tag) && !selfclose { push_stk(idx) }
+            }
+          } else {
+            add_text("<")
+            i = i + 1
+          }
+        }
+      }
+    } else {
+      // text run until next '<'
+      start := i
+      for i < n && charat(html, i) != "<" { i = i + 1 }
+      add_text(decode_entities(substr(html, start, i)))
+    }
+  }
+  d = Dom{A}
+}
