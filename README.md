@@ -36,15 +36,15 @@ launches Chrome locally (headful on `$DISPLAY`, else under `xvfb-run`) or, the
 production stealth path, **attaches to a browser you already run**:
 
     # attach to a running / remote Chrome (real fingerprint, real TLS)
-    FURET_CDP_URL=ws://HOST:9222/devtools/page/XXXX  furet maps "..." --heavy
-    FURET_CDP_HTTP=http://HOST:9222                  furet maps "..." --heavy
+    FURET_CDP_URL=ws://HOST:9222/devtools/page/XXXX  furet feed "<url>" --heavy -s "<sel>"
+    FURET_CDP_HTTP=http://HOST:9222                  furet feed "<url>" --heavy -s "<sel>"
 
 Attaching is what makes stealth real: point furet at a genuine desktop Chrome or
 a remote browser and its fingerprint, canvas, WebGL, and JA3 are Chrome's, not a
 custom engine's.
 
-Heavy commands: `fetch`, `eval`, `extract`, and `maps` (all navigate + run JS in
-the real page). `maps <query> --heavy` is an example recipe that drives a maps search in a real browser (use it only where permitted — see Responsible use)
+Heavy commands: `fetch`, `eval`, `extract`, and `feed` (all navigate + run JS in
+the real page). `feed <url> --heavy -s <selector>` is a generic infinite-scroll extractor: it scrolls a JS-rendered list and collects every element matching your selector (use it only where permitted — see Responsible use)
 (consent dismiss + feed scroll + place extraction).
 
 ## Commands
@@ -58,7 +58,7 @@ the real page). `maps <query> --heavy` is an example recipe that drives a maps s
 | `html <url>` | raw response body |
 | `eval <url> --js 'EXPR'` | run JS with a `page` object (light) or in real Chrome (heavy) |
 | `extract <url> --js 'EXPR'` | run JS over the DOM, emit `{count, items}` (light or heavy) |
-| `maps <query> --heavy` | example recipe that drives a browser over a maps search (subject to that provider's Terms — see Responsible use) |
+| `feed <url> --heavy -s SEL` | scroll a JS-rendered list in a real browser and collect items matching SEL → `{count, items:[{text,href}]}` |
 | `guide` | machine-readable capability catalog (JSON) |
 
 `eval` exposes the fetched page to JavaScript as `page.url`, `page.status`,
@@ -115,7 +115,7 @@ yourself or run remotely:
       --remote-allow-origins='*' --user-data-dir=/tmp/fe about:blank &
     FURET_CDP_HTTP=http://127.0.0.1:9222 furet extract --heavy "<url>" --js "<extractor>"
 
-Launch mode (`furet maps ... --heavy` with no env) starts a browser itself. Note:
+Launch mode (`furet feed ... --heavy` with no env) starts a browser itself. Note:
 some sandboxes block a *Chrome* debug server but allow *Edge* — set `FURET_BROWSER`
 or attach to Edge if so.
 
@@ -140,15 +140,14 @@ furet is a general-purpose tool. **How you use it is your responsibility.** Befo
 pointing it at a site you do not own:
 
 - Read and respect that site's **Terms of Service** and `robots.txt`. Many
-  services (Google Maps among them) restrict or prohibit automated extraction;
+  many services restrict or prohibit automated extraction;
   bulk-extracting from them may breach their terms even when the pages are public.
 - Do not collect **personal data** unlawfully. Data-protection law (e.g. the GDPR
   in the EU) can apply to scraped personal data regardless of whether it is public.
 - Scrape gently: identify yourself where appropriate, rate-limit, and don't
   degrade the target's service.
-- Prefer official **APIs** and data you own or have permission to access. The
-  built-in `maps` recipe is a convenience example, not an endorsement to breach
-  any provider's terms.
+- Prefer official **APIs** and data you own or have permission to access. furet
+  ships **no built-in target** — you supply every URL and selector.
 
 This project does not endorse or encourage any use that violates a third party's
 terms or the law, and it names no site as an approved target.

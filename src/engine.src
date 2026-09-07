@@ -233,37 +233,47 @@ func heavy_fetch(url) (p) {
   p = Page{ false, 0, url, url, "", "", "engine 'heavy': use fetch/extract/eval/maps (they drive CDP), not the light Page path" }
 }
 
-// the Google Maps scraping recipe: dismiss consent, scroll the results feed
-// until enough place cards load, then map each to {name,url}.
-func maps_recipe() (js) {
+// feed_recipe: a NEUTRAL infinite-scroll extractor. The caller supplies the URL,
+// the repeating-item CSS selector, and (optionally) the scroll-container selector
+// and a target count. Nothing here is aimed at any particular site.
+func feed_recipe(item_sel, feed_sel, limit) (js) {
+  fexpr := "document.querySelector('[role=\"feed\"]')||document.scrollingElement"
+  if len(feed_sel) > 0 { fexpr = "document.querySelector(" + jstr(feed_sel) + ")||document.scrollingElement" }
   js = "(async()=>{" +
        "const sleep=ms=>new Promise(r=>setTimeout(r,ms));" +
-       "await sleep(1500);" +
-       "const cbtn=[...document.querySelectorAll('button,[role=\"button\"]')].find(b=>/tout accepter|accept all|j.accepte|agree/i.test(b.textContent||''));" +
-       "if(cbtn){cbtn.click(); await sleep(2000);}" +
+       "const ITEM=" + jstr(item_sel) + ";" +
+       "await sleep(1200);" +
        "let last=0,stale=0;" +
-       "for(let k=0;k<160 && stale<30;k++){" +
-       "const cards=document.querySelectorAll('a.hfpxzc');" +
-       "if(cards.length){ cards[cards.length-1].scrollIntoView({block:'end',behavior:'instant'}); }" +
-       "const f=document.querySelector('[role=\"feed\"]'); if(f){ f.scrollTop=f.scrollHeight; if(k%7===6){ f.scrollTop=f.scrollHeight-1200; } }" +
+       "for(let k=0;k<160 && document.querySelectorAll(ITEM).length<" + str(limit) + " && stale<30;k++){" +
+       "const it=document.querySelectorAll(ITEM);" +
+       "if(it.length){ it[it.length-1].scrollIntoView({block:'end',behavior:'instant'}); }" +
+       "const f=" + fexpr + ";" +
+       "if(f){ f.scrollTop=f.scrollHeight; if(k%7===6){ f.scrollTop=f.scrollHeight-1200; } }" +
        "await sleep(1000);" +
-       "const done=/vous \u00eates arriv|end of the list|reached the end of|fin de la liste/i.test(document.body?document.body.innerText:'');" +
-       "const n=document.querySelectorAll('a.hfpxzc').length; stale=(n===last)?stale+1:0; last=n;" +
-       "if(done) break;}" +
-       "return [...document.querySelectorAll('a.hfpxzc')].map(a=>({name:a.getAttribute('aria-label')||'',url:a.href}));" +
+       "const n=document.querySelectorAll(ITEM).length; stale=(n===last)?stale+1:0; last=n;}" +
+       "return [...document.querySelectorAll(ITEM)].map(el=>{" +
+       "const a=el.matches('a[href]')?el:el.querySelector('a[href]');" +
+       "return {text:(el.getAttribute('aria-label')||el.textContent||'').trim().replace(/\\s+/g,' '), href:a?a.href:''};" +
+       "});" +
        "})()"
 }
 
-func cmd_maps(engine, query) (code) {
-  murl := "https://www.google.com/maps/search/" + replace(query, " ", "+") + "?hl=fr"
+func cmd_feed(engine, url, item_sel, feed_sel, limit) (code) {
   if engine != "heavy" {
-    emit_err(engine, "maps", murl, 0, "maps requires --heavy (Google Maps is JS-rendered + anti-bot; needs a real browser)")
+    emit_err(engine, "feed", url, 0, "feed requires --heavy (it scrolls a JS-rendered page in a real browser)")
     code = 1
     return
   }
-  ok, val, err := heavy_run(murl, wrap_heavy(maps_recipe()), 3000)
-  if !ok { emit_err("heavy", "maps", murl, 0, err)  code = 1  return }
-  emit("heavy", "maps", murl, 200, true, val, "")
+  if len(item_sel) == 0 {
+    emit_err("heavy", "feed", url, 0, "feed needs -s <item-selector> (the repeating element to collect)")
+    code = 1
+    return
+  }
+  lim := limit
+  if lim <= 0 { lim = 100 }
+  ok, val, err := heavy_run(url, wrap_heavy(feed_recipe(item_sel, feed_sel, lim)), 3000)
+  if !ok { emit_err("heavy", "feed", url, 0, err)  code = 1  return }
+  emit("heavy", "feed", url, 200, true, val, "")
   code = 0
 }
 
