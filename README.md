@@ -21,7 +21,7 @@ whether it ran the fast custom engine or (later) a stealth browser.
 | Engine | Flag | Status | For |
 |---|---|---|---|
 | light | `--light` (default) | ready | fast, tiny; fetch + custom DOM + JS (QuickJS); non-hostile JS sites |
-| heavy | `--heavy` | ready (attach) | real Chrome via CDP — launch locally, or **attach to any Chrome / remote browser** for stealth |
+| heavy | `--heavy` | ready (verified live) | real Chromium (Chrome/**Edge**) via CDP — launch locally, or **attach to any browser** for stealth |
 
 The **light** engine is a from-scratch stack: machin's native HTTP client, a
 pragmatic HTML tokenizer building a flat DOM arena (`src/dom.src`), a CSS-lite
@@ -103,20 +103,32 @@ chrome-in-xvfb:
 
 ## Heavy engine: launching vs attaching
 
-Some sandboxes (including the one furet was developed in) forbid a process from
-starting a Chrome remote-debugging server. There, use **attach mode**
-(`FURET_CDP_URL` / `FURET_CDP_HTTP`) against a Chrome you start outside furet:
+The heavy engine works against any Chromium (Chrome or **Microsoft Edge** — same
+CDP). Verified live: `furet maps "restaurants Annecy" --heavy` scraped **120 real
+Annecy restaurants** from Google Maps.
 
-    google-chrome --headless=new --remote-debugging-port=9222 \
-      --user-data-dir=/tmp/c --remote-allow-origins='*' about:blank &
+Attach mode (the production stealth path) points furet at a browser you start
+yourself or run remotely:
+
+    microsoft-edge --headless=new --remote-debugging-port=9222 \
+      --remote-allow-origins='*' --user-data-dir=/tmp/fe about:blank &
     FURET_CDP_HTTP=http://127.0.0.1:9222 furet maps "restaurants Annecy" --heavy
 
-The CDP transport (handshake, masked framing, request/response) is verified
-end-to-end; the launch path works wherever the environment permits a debug port.
+Launch mode (`furet maps ... --heavy` with no env) starts a browser itself. Note:
+some sandboxes block a *Chrome* debug server but allow *Edge* — set `FURET_BROWSER`
+or attach to Edge if so.
+
+The CDP client is pure MFL: a plain-ws client with fragment reassembly
+(`src/wsclient.src`), CDP request/response (`src/cdp.src`), and Content-Length
+HTTP/1.1 discovery (machin's `http_get` hangs on the DevTools keep-alive).
 
 ## Status
 
-Light engine: fetch + custom DOM/CSS + real DOM in JS (`document.querySelector*`)
-+ `extract`; charset transcoding; verified extracting 3434 records from a real
-French AMAP directory. Heavy engine: Chrome via a pure-MFL CDP client, attach or
-launch, with a built-in Google Maps recipe. Screenshots/PDF are a later slice.
+Both acceptance targets pass live:
+- `--light`: `furet extract` pulls **3434 AMAP records** from a real French
+  directory (avenir-bio.fr), valid UTF-8, ~2 s.
+- `--heavy`: `furet maps "restaurants Annecy"` returns **120 real Google Maps
+  places** via a real browser (Edge) over a pure-MFL CDP client.
+
+Later slices: screenshots/PDF (Page.captureScreenshot), heavy text/links/attr,
+child/sibling CSS combinators.
