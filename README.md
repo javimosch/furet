@@ -44,7 +44,7 @@ a remote browser and its fingerprint, canvas, WebGL, and JA3 are Chrome's, not a
 custom engine's.
 
 Heavy commands: `fetch`, `eval`, `extract`, and `maps` (all navigate + run JS in
-the real page). `maps <query> --heavy` has the Google Maps recipe built in
+the real page). `maps <query> --heavy` is an example recipe that drives a maps search in a real browser (use it only where permitted — see Responsible use)
 (consent dismiss + feed scroll + place extraction).
 
 ## Commands
@@ -58,7 +58,7 @@ the real page). `maps <query> --heavy` has the Google Maps recipe built in
 | `html <url>` | raw response body |
 | `eval <url> --js 'EXPR'` | run JS with a `page` object (light) or in real Chrome (heavy) |
 | `extract <url> --js 'EXPR'` | run JS over the DOM, emit `{count, items}` (light or heavy) |
-| `maps <query> --heavy` | scrape Google Maps places via real Chrome |
+| `maps <query> --heavy` | example recipe that drives a browser over a maps search (subject to that provider's Terms — see Responsible use) |
 | `guide` | machine-readable capability catalog (JSON) |
 
 `eval` exposes the fetched page to JavaScript as `page.url`, `page.status`,
@@ -104,15 +104,16 @@ chrome-in-xvfb:
 ## Heavy engine: launching vs attaching
 
 The heavy engine works against any Chromium (Chrome or **Microsoft Edge** — same
-CDP). Verified live: `furet maps "restaurants Annecy" --heavy` scraped **120 real
-Annecy restaurants** from Google Maps.
+CDP). It navigates a real page and runs your extractor JavaScript in it, so it
+handles JS-rendered sites the light engine can't. **You are responsible for using
+it only where you are permitted to** (see Responsible use below).
 
 Attach mode (the production stealth path) points furet at a browser you start
 yourself or run remotely:
 
     microsoft-edge --headless=new --remote-debugging-port=9222 \
       --remote-allow-origins='*' --user-data-dir=/tmp/fe about:blank &
-    FURET_CDP_HTTP=http://127.0.0.1:9222 furet maps "restaurants Annecy" --heavy
+    FURET_CDP_HTTP=http://127.0.0.1:9222 furet extract --heavy "<url>" --js "<extractor>"
 
 Launch mode (`furet maps ... --heavy` with no env) starts a browser itself. Note:
 some sandboxes block a *Chrome* debug server but allow *Edge* — set `FURET_BROWSER`
@@ -124,11 +125,44 @@ HTTP/1.1 discovery (machin's `http_get` hangs on the DevTools keep-alive).
 
 ## Status
 
-Both acceptance targets pass live:
-- `--light`: `furet extract` pulls **3434 AMAP records** from a real French
-  directory (avenir-bio.fr), valid UTF-8, ~2 s.
-- `--heavy`: `furet maps "restaurants Annecy"` returns **120 real Google Maps
-  places** via a real browser (Edge) over a pure-MFL CDP client.
+- `--light` extracts structured records from server-rendered pages at high volume
+  (thousands of items from a large directory page in ~2 s), sniffing `<meta
+  charset>` and transcoding legacy encodings to UTF-8.
+- `--heavy` drives a real browser (Chrome/Edge) over a pure-MFL CDP client to
+  scrape JS-rendered pages, with best-effort dedup and an opt-in `--screenshot`.
 
-Later slices: screenshots/PDF (Page.captureScreenshot), heavy text/links/attr,
-child/sibling CSS combinators.
+Later slices: PDF (Page.captureScreenshot already does screenshots), heavy
+text/links/attr, child/sibling CSS combinators.
+
+## Responsible use
+
+furet is a general-purpose tool. **How you use it is your responsibility.** Before
+pointing it at a site you do not own:
+
+- Read and respect that site's **Terms of Service** and `robots.txt`. Many
+  services (Google Maps among them) restrict or prohibit automated extraction;
+  bulk-extracting from them may breach their terms even when the pages are public.
+- Do not collect **personal data** unlawfully. Data-protection law (e.g. the GDPR
+  in the EU) can apply to scraped personal data regardless of whether it is public.
+- Scrape gently: identify yourself where appropriate, rate-limit, and don't
+  degrade the target's service.
+- Prefer official **APIs** and data you own or have permission to access. The
+  built-in `maps` recipe is a convenience example, not an endorsement to breach
+  any provider's terms.
+
+This project does not endorse or encourage any use that violates a third party's
+terms or the law, and it names no site as an approved target.
+
+## Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. The authors and
+contributors accept **no liability** for any claim, damages, or other liability
+arising from its use, and are **not responsible** for how it is used or for any
+consequences of scraping any third-party service. See [LICENSE](LICENSE).
+
+## Credits
+
+Built in [machin](https://github.com/javimosch/machin) (MFL). Developed with
+[Claude Code](https://claude.com/claude-code). Embeds
+[QuickJS-ng](https://github.com/quickjs-ng/quickjs) (MIT) for the light engine's
+JavaScript runtime. Licensed under the MIT License.
