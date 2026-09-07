@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/furet-logo.png" alt="furet — a ferret" width="300">
+</p>
+
 # furet
 
 Agent-first scraping & browser manipulation, as one small static machin binary,
