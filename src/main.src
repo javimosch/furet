@@ -16,6 +16,10 @@ func print_help() {
   println("  eval  <url> --js 'EXPR'     run JS with a `page` object + document (light only)")
   println("  extract <url> --js 'EXPR'   run JS over the real DOM, emit {count,items} JSON")
   println("  maps  <query> --heavy       scrape Google Maps places (real browser)")
+  println("")
+  println("options (extract/maps):")
+  println("  --no-dedupe                 keep duplicates (best-effort dedupe is default)")
+  println("  --screenshot PATH           heavy only: save a PNG proof of the page")
   println("  guide                       machine-readable capability catalog (JSON)")
   println("  help                        this text")
   println("")
@@ -38,6 +42,7 @@ func print_guide() {
   s = s + "{\"name\":\"html\",\"args\":[\"url\"],\"data\":{\"html\":\"string\"}},"
   s = s + "{\"name\":\"eval\",\"args\":[\"url\"],\"options\":{\"--js\":\"expression\"},\"data\":{\"result\":\"string\"},\"js_globals\":[\"page.url\",\"page.status\",\"page.title\",\"page.text\",\"page.html\",\"document.querySelector\",\"document.querySelectorAll\",\"element.textContent\",\"element.getAttribute\"]},"
   s = s + "{\"name\":\"extract\",\"args\":[\"url\"],\"options\":{\"--js\":\"expression returning an array/value over document\"},\"data\":{\"count\":\"int\",\"items\":\"any\"}}],"
+  s = s + "\"defaults\":{\"dedupe\":\"on (hash items; --no-dedupe to disable)\",\"screenshot\":\"off (--screenshot PATH, heavy only)\"},"
   s = s + "\"envelope\":{\"ok\":\"bool\",\"engine\":\"string\",\"cmd\":\"string\",\"url\":\"string\",\"status\":\"int\",\"data\":\"object|null\",\"error\":\"string\"},"
   s = s + "\"css_support\":[\"tag\",\"*\",\"#id\",\".class\",\"[attr]\",\"compound\",\"descendant (space)\"],"
   s = s + "\"selector_note\":\"child >, siblings, attr-value, pseudo-classes are future slices\","
@@ -53,7 +58,11 @@ func main() {
   fs = flag_str(fs, "selector", "s", "", "css selector")
   fs = flag_str(fs, "name", "n", "", "attribute name")
   fs = flag_str(fs, "js", "", "", "javascript expression for eval")
+  fs = flag_bool(fs, "no-dedupe", "", "keep duplicate items (dedupe is on by default)")
+  fs = flag_str(fs, "screenshot", "", "", "heavy: save a PNG proof of the page to this path")
   fs = parse_flags(fs, args())
+  if flag_on(fs, "no-dedupe") { g_dedupe = false }
+  g_shot = flag_get(fs, "screenshot")
 
   rest := flag_args(fs)
   if len(rest) == 0 { print_help()  exit(2) }

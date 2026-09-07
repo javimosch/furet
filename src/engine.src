@@ -100,6 +100,50 @@ func parse_http_base(base) (host, port) {
   if colon >= 0 { host = substr(rest, 0, colon)  port = parse_int(substr(rest, colon+1, len(rest))) } else { host = rest }
 }
 
+// dedupe + screenshot config (set from CLI flags in main).
+var g_dedupe = true
+var g_shot = ""
+
+// best-effort dedupe: drop items whose JSON hash was already seen.
+func js_dd_def() (s) {
+  s = "var __dd=function(a){if(!Array.isArray(a))return a;var s={},o=[],i;for(i=0;i<a.length;i++){var x=a[i];var k=(x&&typeof x===\"object\")?JSON.stringify(x):String(x);if(!s[k]){s[k]=1;o.push(x);}}return o;};"
+}
+func dd_flag() (d) { d = "false"  if g_dedupe { d = "true" } }
+
+// wrap a LIGHT (synchronous, QuickJS) extractor: dedupe, then JSON.stringify
+// {count,items} (QuickJS String()-of-object is useless, so stringify explicitly).
+func wrap_light(js) (w) {
+  w = "(function(){" + js_dd_def() +
+      "var r = (" + js + ");" +
+      "if(" + dd_flag() + "){ r = __dd(r); }" +
+      "return JSON.stringify(Array.isArray(r)?{count:r.length,items:r}:{count:(r==null?0:1),items:r});" +
+      "})()"
+}
+// wrap a HEAVY (async, real browser) extractor: await, dedupe, return the object
+// (CDP returnByValue serializes it).
+func wrap_heavy(js) (w) {
+  w = "(async()=>{" + js_dd_def() +
+      "var r = await (" + js + ");" +
+      "if(" + dd_flag() + "){ r = __dd(r); }" +
+      "return Array.isArray(r)?{count:r.length,items:r}:{count:(r==null?0:1),items:r};" +
+      "})()"
+}
+
+// capture a PNG of the current heavy page to `path` (opt-in proof). base64_decode
+// truncates at NUL, so we hand the base64 to the shell's `base64 -d`.
+func capture_screenshot(path) (ok) {
+  ok = false
+  res := cdp_call("Page.captureScreenshot", "{\"format\":\"png\",\"captureBeyondViewport\":false}")
+  if len(res) == 0 { return }
+  data, e := json_get(res, ".result.data")
+  if len(e) > 0 || len(data) == 0 { return }
+  if has_prefix(data, "\"") { data = substr(data, 1, len(data)-1) }
+  tmp := path + ".b64"
+  write_file_bytes(tmp, bytes(data))
+  system("base64 -d " + tmp + " > " + path + " && rm -f " + tmp)
+  ok = true
+}
+
 func find_ws_url(js) (url) {
   url = ""
   key := "\"webSocketDebuggerUrl\""
@@ -177,6 +221,7 @@ func heavy_run(url, js, settle_ms) (ok, value, errmsg) {
   cdp_call("Page.navigate", "{\"url\":" + jstr(url) + "}")
   sleep(settle_ms)
   v, ee := cdp_eval(js, true)
+  if len(g_shot) > 0 { capture_screenshot(g_shot) }
   ws_close()
   if len(ee) > 0 { errmsg = ee  return }
   value = v
@@ -216,8 +261,7 @@ func cmd_maps(engine, query) (code) {
     code = 1
     return
   }
-  wrap := "(async()=>{ const r = await (" + maps_recipe() + "); return {count:r.length, items:r}; })()"
-  ok, val, err := heavy_run(murl, wrap, 3000)
+  ok, val, err := heavy_run(murl, wrap_heavy(maps_recipe()), 3000)
   if !ok { emit_err("heavy", "maps", murl, 0, err)  code = 1  return }
   emit("heavy", "maps", murl, 200, true, val, "")
   code = 0
@@ -449,8 +493,7 @@ func cmd_eval(engine, url, js) (code) {
 // scraping N records with document.querySelectorAll + element.textContent.
 func cmd_extract(engine, url, js) (code) {
   if engine == "heavy" {
-    wrap := "(async()=>{ const r = await (" + js + "); return Array.isArray(r)?{count:r.length,items:r}:{count:(r==null?0:1),items:r}; })()"
-    ok, val, err := heavy_run(url, wrap, 2500)
+    ok, val, err := heavy_run(url, wrap_heavy(js), 2500)
     if !ok { emit_err("heavy", "extract", url, 0, err)  code = 1  return }
     emit("heavy", "extract", url, 200, true, val, "")
     code = 0
@@ -462,8 +505,7 @@ func cmd_extract(engine, url, js) (code) {
   e := db_new()
   if e == 0 { emit_err(engine, "extract", url, p.status, "js engine failed to start")  code = 1  return }
   js_setup(e, d, url, p.status, p.body)
-  wrap := "(function(){ var r = (" + js + "); if (Array.isArray(r)) return JSON.stringify({count:r.length,items:r}); return JSON.stringify({count:(r==null?0:1),items:r}); })()"
-  res := db_eval(e, wrap)
+  res := db_eval(e, wrap_light(js))
   db_free(e)
   if has_prefix(res, "ERR: ") {
     emit_err(engine, "extract", url, p.status, substr(res, 5, len(res)))
