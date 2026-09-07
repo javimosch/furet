@@ -4,6 +4,10 @@ Agent-first scraping & browser manipulation, as one small static machin binary,
 with a **pluggable engine backend** so an agent can trade speed for stealth by
 flipping one flag.
 
+> **One of the smallest browser-capable scrapers: instant cold start, ~9 MB RAM,
+> a single static binary, no runtime** (no Node, no Python, no Chromium for the
+> light engine). Measured — see [Footprint](#footprint).
+
 ```
 furet [--light|--heavy|--engine E] <command> <url> [options]
 ```
