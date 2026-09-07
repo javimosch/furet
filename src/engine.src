@@ -24,20 +24,103 @@ func light_fetch(url) (p) {
 // CDP endpoint via FURET_CDP_URL / FURET_CDP_HTTP — the production stealth path:
 // point furet at a real desktop Chrome or a remote browser). ----
 
+// http10_get: a Content-Length-aware HTTP/1.1 GET over dial(). machin's http_get
+// keeps the connection alive and HANGS on Chrome/Edge's DevTools HTTP endpoint
+// (it never closes on its own, and its DevTools server rejects HTTP/1.0). We read
+// the headers, honour Content-Length, and stop — no wait for a close that never
+// comes.
+func idx_from(s, needle, from) (pos) {
+  pos = -1
+  if from >= len(s) { return }
+  sub := substr(s, from, len(s))
+  p := index(sub, needle)
+  if p < 0 { return }
+  pos = p + from
+}
+func parse_clen(headers) (n) {
+  n = -1
+  low := to_lower(headers)
+  p := index(low, "content-length:")
+  if p < 0 { return }
+  st := p + 15
+  e := idx_from(low, "\r\n", st)
+  if e < 0 { e = len(low) }
+  n = parse_int(trim(substr(headers, st, e)))
+}
+func http10_get(host, port, path) (ok, body) {
+  ok = false
+  body = ""
+  fd := dial(host, port)
+  if fd <= 0 { return }
+  req := "GET " + path + " HTTP/1.1\r\nHost: " + host + ":" + str(port) + "\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+  if write(fd, req) <= 0 { close(fd)  return }
+  buf := bytes("")
+  term := bytes("\r\n\r\n")
+  k := 0
+  for bytes_index(buf, term, 0) < 0 && k < 100000 {
+    chunk := read_bytes(fd)
+    if len(chunk) == 0 { break }
+    buf = bytes_concat(buf, chunk)
+    k = k + 1
+  }
+  hp := bytes_index(buf, term, 0)
+  if hp < 0 { close(fd)  return }
+  headers := bytes_str(bytes_sub(buf, 0, hp))
+  clen := parse_clen(headers)
+  bstart := hp + 4
+  if clen < 0 {
+    kk := 0
+    for kk < 100000 { chunk := read_bytes(fd)  if len(chunk) == 0 { break }  buf = bytes_concat(buf, chunk)  kk = kk + 1 }
+    close(fd)
+    body = bytes_str(bytes_sub(buf, bstart, len(buf)))
+    ok = true
+    return
+  }
+  kk := 0
+  for len(buf) < bstart + clen && kk < 100000 {
+    chunk := read_bytes(fd)
+    if len(chunk) == 0 { break }
+    buf = bytes_concat(buf, chunk)
+    kk = kk + 1
+  }
+  close(fd)
+  body = bytes_str(bytes_sub(buf, bstart, bstart + clen))
+  ok = true
+}
+
+// split "http://host:port" into (host, port); defaults port 9222.
+func parse_http_base(base) (host, port) {
+  host = "127.0.0.1"
+  port = 9222
+  rest := base
+  if has_prefix(rest, "http://") { rest = substr(rest, 7, len(rest)) }
+  slash := index(rest, "/")
+  if slash >= 0 { rest = substr(rest, 0, slash) }
+  colon := index(rest, ":")
+  if colon >= 0 { host = substr(rest, 0, colon)  port = parse_int(substr(rest, colon+1, len(rest))) } else { host = rest }
+}
+
 func find_ws_url(js) (url) {
   url = ""
-  key := "\"webSocketDebuggerUrl\":\""
-  parts := split(js, key)
+  key := "\"webSocketDebuggerUrl\""
   best := ""
-  i := 1
-  for i < len(parts) {
-    e := index(parts[i], "\"")
-    if e >= 0 {
-      u := substr(parts[i], 0, e)
-      if len(best) == 0 { best = u }
-      if contains(u, "/devtools/page/") { url = u  return }
+  pos := 0
+  k := 0
+  for k < 100000 {
+    p := idx_from(js, key, pos)
+    if p < 0 { k = 100000 } else {
+      o := idx_from(js, "\"", p + len(key))
+      if o < 0 { k = 100000 } else {
+        e := idx_from(js, "\"", o + 1)
+        if e < 0 { k = 100000 } else {
+          u := substr(js, o + 1, e)
+          if len(best) == 0 { best = u }
+          if contains(u, "/devtools/page/") { url = u  return }
+          pos = e + 1
+        }
+      }
     }
-    i = i + 1
+    k = k + 1
   }
   url = best
 }
@@ -56,8 +139,8 @@ func heavy_launch() (base) {
   b := "http://127.0.0.1:9222"
   k := 0
   for k < 40 {
-    status, _, e := http_get(b + "/json/version")
-    if len(e) == 0 && status == 200 { base = b  return }
+    ok, _ := http10_get("127.0.0.1", 9222, "/json/version")
+    if ok { base = b  return }
     sleep(500)
     k = k + 1
   }
@@ -73,8 +156,9 @@ func heavy_ws_url() (url, errmsg) {
     base = heavy_launch()
     if len(base) == 0 { errmsg = "heavy: could not start Chrome (set FURET_CDP_URL to attach to a browser)"  return }
   }
-  status, body, e := http_get(base + "/json")
-  if len(e) > 0 || status != 200 { errmsg = "heavy: cannot reach CDP at " + base + "/json (" + e + ")"  return }
+  host, port := parse_http_base(base)
+  gok, body := http10_get(host, port, "/json")
+  if !gok { errmsg = "heavy: cannot reach CDP at " + base + "/json"  return }
   url = find_ws_url(body)
   if len(url) == 0 { errmsg = "heavy: no page target at " + base }
 }
@@ -113,11 +197,14 @@ func maps_recipe() (js) {
        "const cbtn=[...document.querySelectorAll('button,[role=\"button\"]')].find(b=>/tout accepter|accept all|j.accepte|agree/i.test(b.textContent||''));" +
        "if(cbtn){cbtn.click(); await sleep(2000);}" +
        "let last=0,stale=0;" +
-       "for(let k=0;k<80 && document.querySelectorAll('a.hfpxzc').length<120 && stale<8;k++){" +
-       "const sc=document.querySelector('[role=\"feed\"]')||document.scrollingElement;" +
-       "if(sc){sc.scrollTop=sc.scrollHeight;}" +
-       "await sleep(1300);" +
-       "const n=document.querySelectorAll('a.hfpxzc').length; stale=(n===last)?stale+1:0; last=n;}" +
+       "for(let k=0;k<140 && document.querySelectorAll('a.hfpxzc').length<140 && stale<16;k++){" +
+       "const cards=document.querySelectorAll('a.hfpxzc');" +
+       "if(cards.length){ cards[cards.length-1].scrollIntoView({block:'end',behavior:'instant'}); }" +
+       "const f=document.querySelector('[role=\"feed\"]'); if(f){ f.scrollTop=f.scrollHeight; }" +
+       "await sleep(1100);" +
+       "const done=/vous \u00eates arriv|end of the list|reached the end of/i.test(document.body?document.body.innerText:'');" +
+       "const n=document.querySelectorAll('a.hfpxzc').length; stale=(n===last)?stale+1:0; last=n;" +
+       "if(done) break;}" +
        "return [...document.querySelectorAll('a.hfpxzc')].map(a=>({name:a.getAttribute('aria-label')||'',url:a.href}));" +
        "})()"
 }

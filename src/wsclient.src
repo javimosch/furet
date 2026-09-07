@@ -49,13 +49,17 @@ func ws_send_op(opcode, payload) (ok) {
 }
 func ws_send_text(s) (ok) { ok = ws_send_op(1, bytes(s)) }
 
-func ws_recv_text() (msg, ok) {
-  msg = ""
+// read ONE raw frame -> (fin, opcode, payload). Server frames are unmasked.
+func ws_read_frame() (fin, opcode, payload, ok) {
+  fin = false
+  opcode = -1
+  payload = bytes("")
   ok = false
   if !ws_fill_to(2) { return }
   b0 := byte_at(WS_BUF, 0)
   b1 := byte_at(WS_BUF, 1)
-  opcode := b0 % 16
+  fin = b0 >= 128
+  opcode = b0 % 16
   masked := b1 >= 128
   ln := b1 % 128
   hdr := 2
@@ -76,14 +80,33 @@ func ws_recv_text() (msg, ok) {
   if masked { mlen = 4 }
   total := hdr + mlen + ln
   if !ws_fill_to(total) { return }
-  ph := hdr + mlen
-  payload := bytes_sub(WS_BUF, ph, ph + ln)
+  payload = bytes_sub(WS_BUF, hdr + mlen, total)
   WS_BUF = bytes_sub(WS_BUF, total, len(WS_BUF))
-  if opcode == 8 { ok = false  return }
-  if opcode == 9 { ws_send_op(10, payload)  m2, o2 := ws_recv_text()  msg = m2  ok = o2  return }
-  if opcode == 10 { m3, o3 := ws_recv_text()  msg = m3  ok = o3  return }
-  msg = bytes_str(payload)
   ok = true
+}
+
+// receive a full message, reassembling fragmented frames (FIN/continuation) and
+// answering pings. Chromium fragments large/long-running results, so this must
+// accumulate opcode-0 continuations until the FIN frame.
+func ws_recv_text() (msg, ok) {
+  msg = ""
+  ok = false
+  parts := []string{}
+  k := 0
+  for k < 2000000 {
+    fin, opcode, payload, o := ws_read_frame()
+    if !o { return }
+    if opcode == 8 { return }
+    if opcode == 9 { ws_send_op(10, payload) } else {
+      if opcode == 10 {
+        // pong: ignore
+      } else {
+        parts = append(parts, bytes_str(payload))
+        if fin { msg = join(parts, "")  ok = true  return }
+      }
+    }
+    k = k + 1
+  }
 }
 
 func ws_connect(url) (ok) {
