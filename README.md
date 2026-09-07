@@ -47,6 +47,44 @@ Heavy commands: `fetch`, `eval`, `extract`, and `feed` (all navigate + run JS in
 the real page). `feed <url> --heavy -s <selector>` is a generic infinite-scroll extractor: it scrolls a JS-rendered list and collects every element matching your selector (use it only where permitted — see Responsible use)
 (consent dismiss + feed scroll + place extraction).
 
+## Footprint
+
+furet's `--light` engine is a single static binary that embeds a real JavaScript
+runtime (QuickJS) **instead of a browser**, so it scrapes JS-capable pages at a
+fraction of the memory and disk of browser-based tools. Measured on this machine
+with `/usr/bin/time`, extracting 200 structured records over the light engine:
+
+| Tool | Install / binary | RAM (typical) | Extra runtime | Runs page JS |
+|---|---|---|---|---|
+| **furet --light** | **7.3 MB** static (1.3 MB dynamic) | **~9 MB** | none | yes (QuickJS) |
+| obscura | ~70 MB | ~30 MB | none | yes (V8) |
+| Headless Chrome / Chromium | ~300 MB+ | ~200 MB+ per tab | none | yes |
+| Puppeteer / Playwright | Chromium ~170–280 MB + `node_modules` | ~200 MB+ | Node.js | yes |
+| Scrapy / BeautifulSoup | Python packages | ~30–60 MB | Python | no¹ |
+
+¹ Pure-Python HTML parsers don't run page JavaScript; scraping JS-rendered sites
+adds Selenium/Playwright + a full browser.
+
+**furet light-engine numbers (measured):**
+
+| Metric | Value |
+|---|---|
+| Static binary (self-contained) | 7.3 MB |
+| Dynamic binary | 1.3 MB (links only libc + OpenSSL) |
+| RAM, typical scrape (fetch + parse + JS extract of 200 items) | ~9 MB peak |
+| Time, 200-record extract (local page) | ~0.02 s |
+| Cold start + HTTPS fetch (incl. TLS) | ~0.23 s |
+| Startup runtime | none — no Node, no Python, no Chromium |
+
+The light engine holds the parsed DOM in the JS engine, so peak RAM scales with
+page size (a ~900 KB page peaks near ~100 MB while it works, then exits). Numbers
+for other tools are typical/published figures, not measured here — obscura's are
+its own published claims.
+
+> The lightweight numbers are the **light** engine, the right tool for pages that
+> aren't actively defended. furet's `--heavy` engine drives a real Chrome/Edge, so
+> its footprint there is a browser's — you reach for it only when a site needs one.
+
 ## Commands
 
 | Command | Does |
