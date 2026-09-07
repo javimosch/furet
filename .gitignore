@@ -4,3 +4,5 @@
 *.o
 vendor/qjs/libqjs.a
 build.mfl
+src/domshim_gen.src
+src/latin1_gen.src
