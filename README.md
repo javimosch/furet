@@ -1,6 +1,11 @@
 <p align="center">
   <img src="assets/furet-logo.png" alt="furet — a ferret" width="300">
 </p>
+<p align="center">
+  <a href="https://javimosch.github.io/furet/"><b>Website</b></a> ·
+  <a href="https://github.com/javimosch/furet">GitHub</a> ·
+  <a href="#footprint">Footprint</a>
+</p>
 
 # furet
 
