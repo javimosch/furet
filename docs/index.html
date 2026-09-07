@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>furet — lightweight agent-first web scraping & browser automation</title>
+<meta name="description" content="One of the smallest browser-capable scrapers: instant cold start, ~9 MB RAM, a single static binary, no runtime. A --light custom engine (embedded QuickJS + from-scratch DOM/CSS) and a --heavy real-browser engine (pure-MFL Chrome/Edge CDP client).">
+<meta property="og:type" content="website">
+<meta property="og:title" content="furet — lightweight agent-first web scraping">
+<meta property="og:description" content="One of the smallest browser-capable scrapers: instant cold start, ~9 MB RAM, one static binary, no runtime. Light QuickJS engine + heavy real-browser CDP engine.">
+<meta property="og:image" content="https://javimosch.github.io/furet/furet-logo.png">
+<meta property="og:url" content="https://javimosch.github.io/furet/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://javimosch.github.io/furet/furet-logo.png">
+<link rel="icon" type="image/png" href="furet-logo.png">
+<style>
+:root{
+  --bg:#faf6ef; --panel:#fffdf9; --cream:#efe4d2; --ink:#2e2016; --muted:#6d5a45;
+  --tan:#a9744a; --tan-dk:#87582f; --line:#e6d8c3; --code:#2b1d12; --code-bg:#f3ead9;
+  --ok:#3f7d4f; --shadow:0 1px 2px rgba(60,40,20,.06),0 8px 24px rgba(60,40,20,.06);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#181310; --panel:#211913; --cream:#2a2019; --ink:#f2e8d9; --muted:#b9a488;
+    --tan:#cf946a; --tan-dk:#e0a879; --line:#38291d; --code:#f0e6d4; --code-bg:#100c09;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+a{color:var(--tan-dk);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:940px;margin:0 auto;padding:0 22px}
+h1,h2,h3{line-height:1.2;letter-spacing:-.01em}
+code,pre{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+/* hero */
+.hero{text-align:center;padding:54px 0 26px}
+.hero img{width:220px;max-width:62vw;filter:drop-shadow(0 10px 24px rgba(80,50,25,.18))}
+.tag{font-size:clamp(20px,3.4vw,29px);font-weight:700;margin:14px auto 6px;max-width:640px}
+.sub{color:var(--muted);max-width:600px;margin:0 auto;font-size:17px}
+.claim{display:inline-block;margin:20px auto 4px;padding:10px 18px;border-radius:999px;
+  background:var(--cream);border:1px solid var(--line);color:var(--ink);font-weight:600;font-size:14.5px}
+.claim b{color:var(--tan-dk)}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin:24px 0 8px}
+.btn{display:inline-block;padding:11px 20px;border-radius:11px;font-weight:650;font-size:15px;border:1px solid var(--line)}
+.btn.p{background:var(--tan);color:#fff;border-color:var(--tan)}
+.btn.p:hover{background:var(--tan-dk);text-decoration:none}
+.btn.s{background:var(--panel);color:var(--ink)}
+.btn.s:hover{text-decoration:none;border-color:var(--tan)}
+/* sections */
+section{padding:34px 0;border-top:1px solid var(--line)}
+h2{font-size:23px;margin:0 0 6px}
+.lead{color:var(--muted);margin:0 0 20px;max-width:680px}
+.grid{display:grid;gap:16px;grid-template-columns:1fr 1fr}
+@media(max-width:680px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px 22px;box-shadow:var(--shadow)}
+.card h3{margin:0 0 4px;font-size:18px;display:flex;align-items:center;gap:9px}
+.pill{font-size:11.5px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;
+  padding:3px 9px;border-radius:999px;background:var(--cream);color:var(--tan-dk);border:1px solid var(--line)}
+.card p{margin:6px 0 0;color:var(--muted);font-size:15px}
+.card .flag{font-family:"SF Mono",ui-monospace,monospace;color:var(--tan-dk);font-weight:700}
+/* code */
+pre{background:var(--code-bg);color:var(--code);border:1px solid var(--line);border-radius:13px;
+  padding:16px 18px;overflow-x:auto;font-size:13.5px;line-height:1.6;margin:0}
+.c-cmt{color:var(--muted)}
+.stack{display:flex;flex-direction:column;gap:14px}
+/* table */
+.tbl{width:100%;border-collapse:collapse;font-size:14.5px;overflow:hidden;border-radius:13px;
+  border:1px solid var(--line);background:var(--panel)}
+.tbl th,.tbl td{padding:11px 14px;text-align:left;border-bottom:1px solid var(--line)}
+.tbl thead th{background:var(--cream);font-size:12.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
+.tbl tr:last-child td{border-bottom:0}
+.tbl tr.me td{background:color-mix(in srgb,var(--tan) 12%,transparent);font-weight:600}
+.tbl td small{color:var(--muted);font-weight:400}
+.scroll{overflow-x:auto}
+.note{font-size:13.5px;color:var(--muted);margin-top:12px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:18px}
+@media(max-width:680px){.stats{grid-template-columns:1fr 1fr}}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;text-align:center;box-shadow:var(--shadow)}
+.stat .n{font-size:24px;font-weight:800;color:var(--tan-dk);letter-spacing:-.02em}
+.stat .l{font-size:12.5px;color:var(--muted);margin-top:2px}
+ul.cmds{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+ul.cmds li{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px 14px;font-size:14.5px}
+ul.cmds code{color:var(--tan-dk);font-weight:700}
+.warn{background:var(--cream);border:1px solid var(--line);border-radius:14px;padding:16px 20px;font-size:14.5px;color:var(--ink)}
+.warn b{color:var(--tan-dk)}
+footer{border-top:1px solid var(--line);padding:30px 0 60px;color:var(--muted);font-size:14px;text-align:center}
+footer a{margin:0 8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <img src="furet-logo.png" alt="furet — a ferret">
+    <div class="tag">Agent-first web scraping &amp; browser automation, in one small static binary</div>
+    <p class="sub">A ferret burrows into a page and flushes out what you need. Pick your engine with one flag: fast and tiny, or a real browser for the hard sites. Every command prints one JSON line.</p>
+    <div class="claim"><b>One of the smallest browser-capable scrapers</b> — instant cold start, ~9&nbsp;MB RAM, a single static binary, no runtime</div>
+    <div class="cta">
+      <a class="btn p" href="https://github.com/javimosch/furet">View on GitHub</a>
+      <a class="btn s" href="#quickstart">Quickstart</a>
+    </div>
+  </header>
+
+  <section id="engines">
+    <h2>Two engines, one output</h2>
+    <p class="lead">The same JSON envelope regardless of engine, so a script parses the output identically whether it ran the fast custom engine or a real browser. Flip <span class="flag">--light</span> / <span class="flag">--heavy</span> and nothing else changes.</p>
+    <div class="grid">
+      <div class="card">
+        <h3>light <span class="pill">ready</span></h3>
+        <p>A from-scratch engine: native HTTP, a hand-written HTML tokenizer and DOM, CSS-lite selectors, and a <b>real JavaScript runtime embedded via C FFI</b> (QuickJS). <code>document.querySelectorAll(...).map(...)</code> runs over the parsed page — no browser, no Node, no Python. Fast and tiny; the right tool for pages that aren't actively defended.</p>
+      </div>
+      <div class="card">
+        <h3>heavy <span class="pill">ready</span></h3>
+        <p>Drives a <b>real Chrome or Edge</b> over the DevTools Protocol through a pure-MFL WebSocket client. Launch one, or <b>attach to a browser you already run</b> for a genuine fingerprint and TLS. Handles JS-rendered sites the light engine can't. Best-effort dedup and an opt-in <span class="flag">--screenshot</span> proof.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="footprint">
+    <h2>Footprint</h2>
+    <p class="lead">The light engine embeds a JavaScript runtime <b>instead of a browser</b>, so it scrapes JS-capable pages at a fraction of the memory and disk of browser-based tools. Measured with <code>/usr/bin/time</code>, extracting 200 structured records.</p>
+    <div class="scroll">
+    <table class="tbl">
+      <thead><tr><th>Tool</th><th>Install / binary</th><th>RAM (typical)</th><th>Extra runtime</th><th>Runs page JS</th></tr></thead>
+      <tbody>
+        <tr class="me"><td>furet --light</td><td>7.3 MB static <small>(1.3 MB dyn)</small></td><td>~9 MB</td><td>none</td><td>yes (QuickJS)</td></tr>
+        <tr><td>obscura</td><td>~70 MB</td><td>~30 MB</td><td>none</td><td>yes (V8)</td></tr>
+        <tr><td>Headless Chrome</td><td>~300 MB+</td><td>~200 MB+ / tab</td><td>none</td><td>yes</td></tr>
+        <tr><td>Puppeteer / Playwright</td><td>Chromium + node_modules</td><td>~200 MB+</td><td>Node.js</td><td>yes</td></tr>
+        <tr><td>Scrapy / BeautifulSoup</td><td>Python packages</td><td>~30–60 MB</td><td>Python</td><td>no*</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">7.3 MB</div><div class="l">static binary, self-contained</div></div>
+      <div class="stat"><div class="n">~9 MB</div><div class="l">RAM, typical scrape</div></div>
+      <div class="stat"><div class="n">~0.02 s</div><div class="l">extract 200 records (local)</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">Node · Python · Chromium (light)</div></div>
+    </div>
+    <p class="note">*Pure-Python parsers don't run page JavaScript; JS-rendered sites need Selenium/Playwright + a browser. Other tools' numbers are typical/published figures, not measured here (obscura's are its own published claims). RAM scales with page size — a ~900 KB page peaks near 100 MB while it works, then exits. The heavy engine drives a real browser, so its footprint there is a browser's.</p>
+  </section>
+
+  <section id="quickstart">
+    <h2>Quickstart</h2>
+    <p class="lead">Needs <a href="https://github.com/javimosch/machin">machin</a>, a C compiler, and python3. QuickJS is vendored and compiled on first build.</p>
+    <div class="stack">
+<pre><span class="c-cmt"># build</span>
+git clone https://github.com/javimosch/furet && cd furet
+./build.sh            <span class="c-cmt"># -> ./furet (static QuickJS compiled from source)</span></pre>
+<pre><span class="c-cmt"># light: run selector JavaScript over a parsed page</span>
+furet extract "https://example.com/" \
+  --js "[...document.querySelectorAll('a')].map(a =&gt; ({text:a.textContent, href:a.getAttribute('href')}))"</pre>
+<pre><span class="c-cmt"># heavy: scroll a JS-rendered list in a real browser</span>
+microsoft-edge --headless=new --remote-debugging-port=9222 \
+  --remote-allow-origins='*' --user-data-dir=/tmp/fe about:blank &amp;
+FURET_CDP_HTTP=http://127.0.0.1:9222 \
+  furet feed "&lt;url&gt;" --heavy -s "&lt;item-selector&gt;" --limit 120 --screenshot out.png</pre>
+    </div>
+  </section>
+
+  <section id="commands">
+    <h2>Commands</h2>
+    <p class="lead">Every command prints one JSON line: <code>{ok, engine, cmd, url, status, data, error}</code>. Exit 0 ok · 1 command error · 2 usage.</p>
+    <ul class="cmds">
+      <li><code>fetch</code> &mdash; status, byte count, content-type, title</li>
+      <li><code>text</code> &mdash; visible text, whole page or per selector</li>
+      <li><code>links</code> &mdash; every anchor: href, absolute url, text</li>
+      <li><code>attr</code> &mdash; an attribute's value for each match</li>
+      <li><code>extract</code> &mdash; run JS over the real DOM, emit <code>{count, items}</code></li>
+      <li><code>feed</code> &mdash; heavy: scroll a JS-rendered list and collect items matching a selector</li>
+      <li><code>eval</code> &mdash; run JS with a <code>page</code> object (light) or in a real browser (heavy)</li>
+      <li><code>guide</code> &mdash; machine-readable capability catalog (JSON)</li>
+    </ul>
+  </section>
+
+  <section id="responsible">
+    <h2>Responsible use</h2>
+    <div class="warn">
+      furet is a general-purpose tool and <b>how you use it is your responsibility</b>. Respect each site's Terms of Service and <code>robots.txt</code>, don't collect personal data unlawfully (the GDPR can apply to public data), rate-limit, and prefer official APIs. furet ships <b>no built-in target</b> — you supply every URL and selector. Provided &ldquo;as is&rdquo;, without warranty; no liability for use. See the <a href="https://github.com/javimosch/furet/blob/main/LICENSE">MIT License</a>.
+    </div>
+  </section>
+
+  <footer>
+    <div>
+      <a href="https://github.com/javimosch/furet">GitHub</a> ·
+      <a href="https://github.com/javimosch/awesome-machin">awesome-machin</a> ·
+      <a href="https://github.com/javimosch/machin">machin (MFL)</a> ·
+      <a href="https://github.com/quickjs-ng/quickjs">QuickJS-ng</a>
+    </div>
+    <div style="margin-top:10px">Built in machin · developed with <a href="https://claude.com/claude-code">Claude Code</a> · MIT</div>
+  </footer>
+
+</div>
+</body>
+</html>
