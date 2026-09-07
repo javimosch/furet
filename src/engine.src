@@ -242,12 +242,12 @@ func maps_recipe() (js) {
        "const cbtn=[...document.querySelectorAll('button,[role=\"button\"]')].find(b=>/tout accepter|accept all|j.accepte|agree/i.test(b.textContent||''));" +
        "if(cbtn){cbtn.click(); await sleep(2000);}" +
        "let last=0,stale=0;" +
-       "for(let k=0;k<140 && document.querySelectorAll('a.hfpxzc').length<140 && stale<16;k++){" +
+       "for(let k=0;k<160 && stale<30;k++){" +
        "const cards=document.querySelectorAll('a.hfpxzc');" +
        "if(cards.length){ cards[cards.length-1].scrollIntoView({block:'end',behavior:'instant'}); }" +
-       "const f=document.querySelector('[role=\"feed\"]'); if(f){ f.scrollTop=f.scrollHeight; }" +
-       "await sleep(1100);" +
-       "const done=/vous \u00eates arriv|end of the list|reached the end of/i.test(document.body?document.body.innerText:'');" +
+       "const f=document.querySelector('[role=\"feed\"]'); if(f){ f.scrollTop=f.scrollHeight; if(k%7===6){ f.scrollTop=f.scrollHeight-1200; } }" +
+       "await sleep(1000);" +
+       "const done=/vous \u00eates arriv|end of the list|reached the end of|fin de la liste/i.test(document.body?document.body.innerText:'');" +
        "const n=document.querySelectorAll('a.hfpxzc').length; stale=(n===last)?stale+1:0; last=n;" +
        "if(done) break;}" +
        "return [...document.querySelectorAll('a.hfpxzc')].map(a=>({name:a.getAttribute('aria-label')||'',url:a.href}));" +

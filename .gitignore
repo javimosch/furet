@@ -2,3 +2,5 @@
 /furet-static
 /build.mfl
 *.o
+vendor/qjs/libqjs.a
+build.mfl
